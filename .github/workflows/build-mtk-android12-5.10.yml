@@ -83,7 +83,7 @@ jobs:
           ksu_branch_input="${{ github.event.inputs.ksu_branch }}"
           if [ -z "$ksu_branch_input" ]; then
             if [ "$ksu_type" = "KSUN" ]; then
-              ksu_ref="v3.2.0"
+              ksu_ref="fixed"
             else
               ksu_ref="main"
             fi
