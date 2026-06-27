@@ -282,10 +282,29 @@ jobs:
       - name: Install ccache
         run: sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ccache
 
-      - name: Set ccache env vars
+      - name: Configure ccache
         run: |
-          echo "CCACHE_DIR=${{ github.workspace }}/.ccache" >> "$GITHUB_ENV"
-          echo "LDCACHE_DIR=${{ github.workspace }}/.ld_cache" >> "$GITHUB_ENV"
+          CACHE_DIR="${{ github.workspace }}/.ccache"
+          LDCACHE_DIR="${{ github.workspace }}/.ld_cache"
+          mkdir -p "$CACHE_DIR"
+          mkdir -p "$LDCACHE_DIR"
+          cat >> "$GITHUB_ENV" <<EOF
+          CCACHE_DIR=$CACHE_DIR
+          LDCACHE_DIR=$LDCACHE_DIR
+          CCACHE_MAXSIZE=4G
+          CCACHE_COMPILERCHECK=content
+          CCACHE_BASEDIR=${GITHUB_WORKSPACE}
+          CCACHE_NOHASHDIR=true
+          CCACHE_IGNOREOPTIONS=--sysroot*
+          CCACHE_COMPRESSION=true
+          CCACHE_COMPRESSION_LEVEL=3
+          CCACHE_DIRECT=true
+          CCACHE_FILE_CLONE=true
+          CCACHE_INODE_CACHE=true
+          CCACHE_IS_KERNEL_COMPILING=true
+          CCACHE_UMASK=002
+          CCACHE_SLOPPINESS=file_macro,time_macros,include_file_mtime,include_file_ctime,pch_defines,system_headers,locale
+          EOF
 
       - name: 🧹 Prepare op_config_json (without KSU fields)
         id: prepare_config
