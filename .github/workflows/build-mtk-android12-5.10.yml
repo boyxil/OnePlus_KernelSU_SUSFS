@@ -279,6 +279,9 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Install ccache
+        run: sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ccache
+
       - name: 🧹 Prepare op_config_json (without KSU fields)
         id: prepare_config
         shell: bash
