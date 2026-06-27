@@ -41,6 +41,10 @@ on:
         description: 'Custom kernel build timestamp for uname -a. Leave empty for current time.'
         type: string
         default: ''
+      models:
+        description: 'Comma-separated model names (empty = all MediaTek). Example: OP10r,OP-ACE'
+        type: string
+        default: ''
       susfs_branch_or_commit:
         description: 'SusFS branch or commit hash (empty = auto-detect)'
         type: string
@@ -98,6 +102,17 @@ jobs:
 
           # Filter: android12 + 5.10 + OOS15/OOS16 + MediaTek SoC only
           jq_filter='map(select(.os_version == "OOS15" or .os_version == "OOS16")) | map(select(.android_version == "android12" and .kernel_version == "5.10")) | map(select(.soc | test("dimensity|helio|mt6"; "i")))'
+
+          # If specific models requested, add model filter
+          models_input="${{ github.event.inputs.models }}"
+          if [ -n "$models_input" ]; then
+            # Build jq select expression: select(.model == "OP10r" or .model == "OP-ACE")
+            model_filter=$(echo "$models_input" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | jq -R . | jq -s 'map("(.model == " + . + ")") | join(" or ")')
+            jq_filter="$jq_filter | map(select($model_filter))"
+            echo "ℹ️  Model filter: $models_input"
+          else
+            echo "ℹ️  Building ALL MediaTek android12-5.10 devices"
+          fi
 
           echo "ℹ️  Filter: android12-5.10, OOS15+OOS16, MediaTek SoCs only"
 
