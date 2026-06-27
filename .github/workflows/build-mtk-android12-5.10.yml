@@ -7,48 +7,25 @@ permissions:
 on:
   workflow_dispatch:
     inputs:
+      model:
+        description: 'Device model'
+        required: true
+        type: choice
+        options:
+          - All MediaTek
+          - OP10r
+          - OP-ACE
+          - OP-ACE-RACE
+          - OP-ACE-2V
+          - OP-NORD-3
+          - OP-PAD-MT6983
+          - OP-PAD-LITE
+        default: All MediaTek
       make_release:
         description: 'Create a release?'
         required: true
         type: boolean
         default: false
-      ksu_options:
-        description: 'KernelSU build json'
-        required: true
-        type: string
-        default: '[{"type":"ksun","hash":"dev"}]'
-      optimize_level:
-        description: "Compiler optimization level"
-        required: true
-        type: choice
-        options: [O2, O3]
-        default: O2
-      clean_build:
-        description: 'Clean build (no ccache)'
-        type: boolean
-        default: false
-      debug:
-        description: 'Enable debug mode'
-        required: false
-        type: boolean
-        default: false
-      mirror_toolchains:
-        description: 'Sync toolchains before build? [99% runs not required]'
-        required: false
-        type: boolean
-        default: false
-      build_timestamp:
-        description: 'Custom kernel build timestamp for uname -a. Leave empty for current time.'
-        type: string
-        default: ''
-      models:
-        description: 'Comma-separated model names (empty = all MediaTek). Example: OP10r,OP-ACE'
-        type: string
-        default: ''
-      susfs_branch_or_commit:
-        description: 'SusFS branch or commit hash (empty = auto-detect)'
-        type: string
-        default: ''
 
 jobs:
   set-op-model:
@@ -79,12 +56,8 @@ jobs:
           set -euo pipefail
           echo "::group::Matrix generation"
 
-          ksu_options_raw='${{ github.event.inputs.ksu_options }}'
-          if ! ksu_options_normalized=$(echo "$ksu_options_raw" | jq -c 'map(if .type then .type |= ascii_upcase | if .hash == null then if .type == "KSUN" then .hash = "dev" elif .type == "KSU" then .hash = "main" else .hash end else . end else error("No type found") end)' 2>&1); then
-            echo "::error::ksu_options validation failed: $ksu_options_normalized"
-            exit 1
-          fi
-
+          # Hardcoded defaults
+          ksu_options_normalized='[{"type":"KSUN","hash":"dev"}]'
           echo "ksu_options_normalized=$ksu_options_normalized" >> $GITHUB_OUTPUT
 
           echo "[" > matrix.json
@@ -103,13 +76,11 @@ jobs:
           # Filter: android12 + 5.10 + OOS15/OOS16 + MediaTek SoC only
           jq_filter='map(select(.os_version == "OOS15" or .os_version == "OOS16")) | map(select(.android_version == "android12" and .kernel_version == "5.10")) | map(select(.soc | test("dimensity|helio|mt6"; "i")))'
 
-          # If specific models requested, add model filter
-          models_input="${{ github.event.inputs.models }}"
-          if [ -n "$models_input" ]; then
-            # Build jq select expression: select(.model == "OP10r" or .model == "OP-ACE")
-            model_filter=$(echo "$models_input" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | jq -R . | jq -s 'map("(.model == " + . + ")") | join(" or ")')
-            jq_filter="$jq_filter | map(select($model_filter))"
-            echo "ℹ️  Model filter: $models_input"
+          # Model filter
+          selected_model="${{ github.event.inputs.model }}"
+          if [ "$selected_model" != "All MediaTek" ]; then
+            jq_filter="$jq_filter | map(select(.model == \"$selected_model\"))"
+            echo "ℹ️  Model: $selected_model"
           else
             echo "ℹ️  Building ALL MediaTek android12-5.10 devices"
           fi
@@ -147,8 +118,8 @@ jobs:
 
           echo "count=$count" >> "$GITHUB_OUTPUT"
 
-          ksu_type=$(echo "$ksu_options_normalized" | jq -r '.[0].type')
-          ksu_ref=$(echo "$ksu_options_normalized" | jq -r '.[0].hash')
+          ksu_type="KSUN"
+          ksu_ref="dev"
 
           if [ "$ksu_type" == "KSUN" ]; then
             KSU_REPO_OWNER="KernelSU-Next"
@@ -210,14 +181,8 @@ jobs:
           SUSFS_REPO="https://gitlab.com/simonpunk/susfs4ksu.git"
           GITLAB_PROJECT_PATH="simonpunk/susfs4ksu"
 
-          SUSFS_INPUT="${{ inputs.susfs_branch_or_commit }}"
-          if [ -z "$SUSFS_INPUT" ]; then
-            SUSFS_BRANCH="gki-android12-5.10"
-            echo "ℹ️  Using default SUSFS branch: $SUSFS_BRANCH"
-          else
-            SUSFS_BRANCH="$SUSFS_INPUT"
-            echo "🔧 Using user-specified SUSFS ref: $SUSFS_BRANCH"
-          fi
+          SUSFS_BRANCH="gki-android12-5.10"
+          echo "ℹ️  Using default SUSFS branch: $SUSFS_BRANCH"
 
           HASH_QUERY="{ project(fullPath: \"${GITLAB_PROJECT_PATH}\") { repository { ch: commit(ref: \"${SUSFS_BRANCH}\") { sha } } } }"
           RELEASE_QUERY="{ project(fullPath: \"${GITLAB_PROJECT_PATH}\") { repository { ch: commit(ref: \"${SUSFS_BRANCH}\") { sha } blobs(paths: [\"kernel_patches/include/linux/susfs.h\"], ref: \"${SUSFS_BRANCH}\") { nodes { rawBlob } } } } }"
@@ -295,51 +260,12 @@ jobs:
           archive: false
           retention-days: 7
 
-  mirror_toolchain:
-    needs: set-op-model
-    if: ${{ inputs.mirror_toolchains }}
-    uses: ./.github/workflows/mirror-toolchains.yml
-    secrets: inherit
-
-  prepare_ccache:
-    name: Prepare ccache binary (download once)
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download custom ccache once
-        run: |
-          set -uo pipefail
-          echo "::group::Download ccache"
-          url="https://raw.githubusercontent.com/WildKernels/kernel_patches/refs/heads/main/ccache/ccache-x86-64"
-          ok=0
-          for attempt in 1 2 3 4 5 6; do
-            if curl -LfsS --connect-timeout 30 --max-time 120 -H "User-Agent: Mozilla/5.0" "$url" -o ccache && [ -s ccache ]; then
-              ok=1; break
-            fi
-            echo "attempt $attempt failed; backing off..."
-            sleep $(( attempt * 5 + RANDOM % 6 ))
-          done
-          if [ "$ok" = 1 ]; then
-            echo "✅ downloaded ccache"
-          else
-            echo "::warning::ccache download failed; will use apt ccache"
-            rm -f ccache
-          fi
-          echo "::endgroup::"
-      - name: Upload ccache artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: ccache-binary
-          path: ccache
-          retention-days: 1
-          if-no-files-found: warn
-
   build:
     name: build (${{ matrix.model }}, ${{ matrix.soc }}, ${{ matrix.android_version }}-${{ matrix.kernel_version }}, ${{ matrix.os_version }}, ${{ matrix.ksu_type }})
-    needs: [set-op-model, mirror_toolchain, prepare_ccache]
+    needs: [set-op-model, prepare_ccache]
     if: |
       !cancelled() &&
-      needs.set-op-model.result == 'success' &&
-      (needs.mirror_toolchain.result == 'success' || needs.mirror_toolchain.result == 'skipped')
+      needs.set-op-model.result == 'success'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -395,62 +321,6 @@ jobs:
         run: |
           echo "ccache disabled — building from scratch every time"
           echo "CCACHE_DIR=/dev/null" >> "$GITHUB_ENV"
-
-      - name: 🧹 Prepare op_config_json (without KSU fields)
-        id: prepare_config
-        shell: bash
-        run: |
-          echo "config_json=$(jq -nc --argjson m '${{ toJSON(matrix) }}' '$m | del(.ksu_type, .ksu_hash, .ksu_resolved_hash)')" >> "$GITHUB_OUTPUT"
-
-      - name: 🔨 Build Kernel
-        id: build
-        uses: ./.github/actions/build-kernel
-        with:
-          op_config_json: ${{ steps.prepare_config.outputs.config_json }}
-          ksu_type: ${{ matrix.ksu_type }}
-          ksu_branch_or_hash: ${{ matrix.ksu_resolved_hash }}
-          susfs_commit_hash_or_branch: ${{ matrix.susfs_resolved_hash }}
-          optimize_level: ${{ inputs.optimize_level }}
-          build_timestamp: ${{ inputs.build_timestamp }}
-          clean: true
-          debug: ${{ inputs.debug }}
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: 📊 Build statistics
-        id: build-stat
-        if: always()
-        run: |
-          echo "::group::Build Statistics"
-          echo "Device: ${{ matrix.model }} (${{ matrix.soc }})"
-          echo "Kernel: ${{ matrix.android_version }}-${{ matrix.kernel_version }}"
-          echo "Status: ${{ job.status }}"
-
-          if [ "${{ steps.build.outcome }}" = "success" ]; then
-            echo ""
-            echo "✅ Build completed successfully"
-            echo "  - Kernel: ${{ steps.build.outputs.kernel_version }}"
-            if [ "${{ matrix.ksu_type }}" = "KSUN" ]; then
-              echo "  - KSU Next: v${{ steps.build.outputs.ksu_version }}"
-              echo "ksun_ver=${{ steps.build.outputs.ksu_version }}" >> "$GITHUB_OUTPUT"
-              echo "ksu_ver=" >> "$GITHUB_OUTPUT"
-            else
-              echo "  - KSU: v${{ steps.build.outputs.ksu_version }}"
-              echo "ksun_ver=" >> "$GITHUB_OUTPUT"
-              echo "ksu_ver=${{ steps.build.outputs.ksu_version }}" >> "$GITHUB_OUTPUT"
-            fi
-            if [ "${{ matrix.susfs }}" = true ]; then
-              echo "  - SUSFS: ${{ steps.build.outputs.susfs_version }}"
-            fi
-            echo "  - Build time: ${{ steps.build.outputs.build_time }}s"
-
-            if [ "${{ inputs.clean_build }}" != "true" ]; then
-              echo "  - ccache hit rate: ${{ steps.build.outputs.ccache_hit_rate }}"
-            fi
-          else
-            echo "❌ Build failed"
-          fi
-
-          echo "::endgroup::"
 
       - name: 📝 Job summary
         if: always()
