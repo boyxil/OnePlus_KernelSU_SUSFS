@@ -154,7 +154,7 @@ jobs:
           echo "count=$count" >> "$GITHUB_OUTPUT"
 
           if [ "$ksu_type" == "KSUN" ]; then
-            KSU_REPO_OWNER="KernelSU-Next"
+            KSU_REPO_OWNER="boyxil"
             KSU_REPO_NAME="KernelSU-Next"
           else
             KSU_REPO_OWNER="tiann"
