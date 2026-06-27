@@ -1171,6 +1171,9 @@ runs:
           fi
         fi
         
+        # Fix MKP compatibility: replace &selinux_state with &fake_state in SUSFS hooks
+        sed -i 's/avc_has_perm(\&selinux_state,/avc_has_perm(\&fake_state,/g' "$SUSFS_FOLDER/kernel_patches/50_add_susfs_in_${{ env.SUSFS_KERNEL_BRANCH }}.patch"
+
         patch -p1 --forward < "$SUSFS_FOLDER/kernel_patches/50_add_susfs_in_${{ env.SUSFS_KERNEL_BRANCH }}.patch"
         
         # Revert Fake kernel patch
