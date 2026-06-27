@@ -30,7 +30,7 @@ on:
           - KSU (original)
         default: KSUN (KernelSU-Next)
       ksu_branch:
-        description: 'KSU branch or commit hash (empty = dev/main)'
+        description: 'KSU branch or commit hash (empty = v3.2.0 for KSUN, main for KSU)'
         type: string
         default: ''
       susfs_branch:
@@ -83,7 +83,7 @@ jobs:
           ksu_branch_input="${{ github.event.inputs.ksu_branch }}"
           if [ -z "$ksu_branch_input" ]; then
             if [ "$ksu_type" = "KSUN" ]; then
-              ksu_ref="dev"
+              ksu_ref="v3.2.0"
             else
               ksu_ref="main"
             fi
