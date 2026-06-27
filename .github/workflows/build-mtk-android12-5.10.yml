@@ -376,54 +376,10 @@ jobs:
           rm -rf ccache-dl
           echo "::endgroup::"
 
-      - name: ♻️ Configure ccache & LTO cache (bounded)
+      - name: ♻️ Skip ccache (no cache = no upload issues)
         run: |
-          echo "::group::Configure ccache environment"
-          set -euo pipefail
-          if command -v ccache >/dev/null 2>&1; then
-            CACHE_DIR="${{ github.workspace }}/.ccache"
-            LDCACHE_DIR="${{ github.workspace }}/.ld_cache"
-            mkdir -p "$CACHE_DIR"
-            mkdir -p "$LDCACHE_DIR"
-
-            SETTINGS=(
-              "CCACHE_DIR=$CACHE_DIR"
-              "LDCACHE_DIR=$LDCACHE_DIR"
-              "CCACHE_MAXSIZE=4G"
-              "CCACHE_COMPILERCHECK=content"
-              "CCACHE_BASEDIR=${GITHUB_WORKSPACE}"
-              "CCACHE_NOHASHDIR=true"
-              "CCACHE_IGNOREOPTIONS=--sysroot*"
-              "CCACHE_COMPRESSION=true"
-              "CCACHE_COMPRESSION_LEVEL=3"
-              "CCACHE_DIRECT=true"
-              "CCACHE_FILE_CLONE=true"
-              "CCACHE_INODE_CACHE=true"
-              "CCACHE_IS_KERNEL_COMPILING=true"
-              "CCACHE_UMASK=002"
-              "CCACHE_SLOPPINESS=file_macro,time_macros,include_file_mtime,include_file_ctime,pch_defines,system_headers,locale"
-            )
-
-            for setting in "${SETTINGS[@]}"; do
-              export "$setting"
-              echo "$setting" >> "$GITHUB_ENV"
-            done
-
-            if [ "${{ inputs.debug }}" == "true" ]; then
-              export "CCACHE_LOGFILE=${{ github.workspace }}/ccache.log"
-              echo "CCACHE_LOGFILE=${{ github.workspace }}/ccache.log" >> "$GITHUB_ENV"
-            fi
-
-            if ccache --help 2>&1 | grep -q 'depend_mode'; then
-              export CCACHE_DEPEND=true
-              echo "CCACHE_DEPEND=true" >> "$GITHUB_ENV"
-            fi
-
-            echo "✅ ccache configured"
-          else
-            echo "ccache not found, skipping."
-          fi
-          echo "::endgroup::"
+          echo "ccache disabled — building from scratch every time"
+          echo "CCACHE_DIR=/dev/null" >> "$GITHUB_ENV"
 
       - name: 🧹 Prepare op_config_json (without KSU fields)
         id: prepare_config
@@ -441,7 +397,7 @@ jobs:
           susfs_commit_hash_or_branch: ${{ matrix.susfs_resolved_hash }}
           optimize_level: ${{ inputs.optimize_level }}
           build_timestamp: ${{ inputs.build_timestamp }}
-          clean: ${{ inputs.clean_build }}
+          clean: true
           debug: ${{ inputs.debug }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
