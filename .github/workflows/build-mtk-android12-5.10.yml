@@ -21,6 +21,22 @@ on:
           - OP-PAD-MT6983
           - OP-PAD-LITE
         default: All MediaTek
+      ksu_type:
+        description: 'KernelSU variant'
+        required: true
+        type: choice
+        options:
+          - KSUN (KernelSU-Next)
+          - KSU (original)
+        default: KSUN (KernelSU-Next)
+      ksu_branch:
+        description: 'KSU branch or commit hash (empty = dev/main)'
+        type: string
+        default: ''
+      susfs_branch:
+        description: 'SUSFS branch or commit hash (empty = auto-detect)'
+        type: string
+        default: ''
       make_release:
         description: 'Create a release?'
         required: true
@@ -56,9 +72,28 @@ jobs:
           set -euo pipefail
           echo "::group::Matrix generation"
 
-          # Hardcoded defaults
-          ksu_options_normalized='[{"type":"KSUN","hash":"dev"}]'
+          # Resolve KSU type and branch from inputs
+          ksu_type_input="${{ github.event.inputs.ksu_type }}"
+          if [[ "$ksu_type_input" == KSUN* ]]; then
+            ksu_type="KSUN"
+          else
+            ksu_type="KSU"
+          fi
+
+          ksu_branch_input="${{ github.event.inputs.ksu_branch }}"
+          if [ -z "$ksu_branch_input" ]; then
+            if [ "$ksu_type" = "KSUN" ]; then
+              ksu_ref="dev"
+            else
+              ksu_ref="main"
+            fi
+          else
+            ksu_ref="$ksu_branch_input"
+          fi
+
+          ksu_options_normalized="[{\"type\":\"$ksu_type\",\"hash\":\"$ksu_ref\"}]"
           echo "ksu_options_normalized=$ksu_options_normalized" >> $GITHUB_OUTPUT
+          echo "ℹ️  KSU: $ksu_type ($ksu_ref)"
 
           echo "[" > matrix.json
           mapfile -t all_json_files < <(find configs/ -name "*.json" -print0 | xargs -0 -n1)
@@ -117,9 +152,6 @@ jobs:
           jq -r '.[] | "  - \(.model) (\(.os_version), \(.soc), \(.android_version)-\(.kernel_version), \(.ksu_type) - \(.ksu_hash))"' <<<"$merged_matrix"
 
           echo "count=$count" >> "$GITHUB_OUTPUT"
-
-          ksu_type="KSUN"
-          ksu_ref="dev"
 
           if [ "$ksu_type" == "KSUN" ]; then
             KSU_REPO_OWNER="KernelSU-Next"
@@ -181,8 +213,14 @@ jobs:
           SUSFS_REPO="https://gitlab.com/simonpunk/susfs4ksu.git"
           GITLAB_PROJECT_PATH="simonpunk/susfs4ksu"
 
-          SUSFS_BRANCH="gki-android12-5.10"
-          echo "ℹ️  Using default SUSFS branch: $SUSFS_BRANCH"
+          SUSFS_INPUT="${{ github.event.inputs.susfs_branch }}"
+          if [ -n "$SUSFS_INPUT" ]; then
+            SUSFS_BRANCH="$SUSFS_INPUT"
+            echo "🔧 Using user-specified SUSFS: $SUSFS_BRANCH"
+          else
+            SUSFS_BRANCH="gki-android12-5.10"
+            echo "ℹ️  Using default SUSFS branch: $SUSFS_BRANCH"
+          fi
 
           HASH_QUERY="{ project(fullPath: \"${GITLAB_PROJECT_PATH}\") { repository { ch: commit(ref: \"${SUSFS_BRANCH}\") { sha } } } }"
           RELEASE_QUERY="{ project(fullPath: \"${GITLAB_PROJECT_PATH}\") { repository { ch: commit(ref: \"${SUSFS_BRANCH}\") { sha } blobs(paths: [\"kernel_patches/include/linux/susfs.h\"], ref: \"${SUSFS_BRANCH}\") { nodes { rawBlob } } } } }"
