@@ -1,0 +1,648 @@
+name: Build MediaTek android12-5.10
+
+permissions:
+  contents: write
+  actions: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      make_release:
+        description: 'Create a release?'
+        required: true
+        type: boolean
+        default: false
+      ksu_options:
+        description: 'KernelSU build json'
+        required: true
+        type: string
+        default: '[{"type":"ksun","hash":"dev"}]'
+      optimize_level:
+        description: "Compiler optimization level"
+        required: true
+        type: choice
+        options: [O2, O3]
+        default: O2
+      clean_build:
+        description: 'Clean build (no ccache)'
+        type: boolean
+        default: false
+      debug:
+        description: 'Enable debug mode'
+        required: false
+        type: boolean
+        default: false
+      mirror_toolchains:
+        description: 'Sync toolchains before build? [99% runs not required]'
+        required: false
+        type: boolean
+        default: false
+      build_timestamp:
+        description: 'Custom kernel build timestamp for uname -a. Leave empty for current time.'
+        type: string
+        default: ''
+      susfs_branch_or_commit:
+        description: 'SusFS branch or commit hash (empty = auto-detect)'
+        type: string
+        default: ''
+
+jobs:
+  set-op-model:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      device_count: ${{ steps.set-matrix.outputs.count }}
+      active_gki_keys: ${{ steps.set-matrix.outputs.active_gki_keys }}
+      susfs_hash_android12_5_10: ${{ steps.set-matrix.outputs.susfs_hash_android12_5_10 }}
+      ksu_resolved_hash: ${{ steps.set-matrix.outputs.ksu_resolved_hash }}
+      ksu_options_normalized: ${{ steps.set-matrix.outputs.ksu_options_normalized }}
+      susfs_base_version: ${{ steps.set-matrix.outputs.susfs_base_version }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_HTTP_TIMEOUT: 600
+    steps:
+      - name: 📥 Checkout Code (to access configs/)
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: |
+            configs/
+          sparse-checkout-cone-mode: false
+
+      - name: 🔍 Generate build matrix (MediaTek android12-5.10 only)
+        id: set-matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "::group::Matrix generation"
+
+          ksu_options_raw='${{ github.event.inputs.ksu_options }}'
+          if ! ksu_options_normalized=$(echo "$ksu_options_raw" | jq -c 'map(if .type then .type |= ascii_upcase | if .hash == null then if .type == "KSUN" then .hash = "dev" elif .type == "KSU" then .hash = "main" else .hash end else . end else error("No type found") end)' 2>&1); then
+            echo "::error::ksu_options validation failed: $ksu_options_normalized"
+            exit 1
+          fi
+
+          echo "ksu_options_normalized=$ksu_options_normalized" >> $GITHUB_OUTPUT
+
+          echo "[" > matrix.json
+          mapfile -t all_json_files < <(find configs/ -name "*.json" -print0 | xargs -0 -n1)
+          for i in "${!all_json_files[@]}"; do
+            file="${all_json_files[$i]}"
+            if [ -f "$file" ]; then
+              jq -r '.' "$file" >> matrix.json
+              if [ $((i+1)) -lt ${#all_json_files[@]} ]; then
+                echo "," >> matrix.json
+              fi
+            fi
+          done
+          echo "]" >> matrix.json
+
+          # Filter: android12 + 5.10 + OOS15/OOS16 + MediaTek SoC only
+          jq_filter='map(select(.os_version == "OOS15" or .os_version == "OOS16")) | map(select(.android_version == "android12" and .kernel_version == "5.10")) | map(select(.soc | test("dimensity|helio|mt6"; "i")))'
+
+          echo "ℹ️  Filter: android12-5.10, OOS15+OOS16, MediaTek SoCs only"
+
+          filtered=$(jq -c "$jq_filter" matrix.json)
+          count=$(jq 'length' <<<"$filtered")
+
+          filtered=$(echo "$filtered" | jq '
+            sort_by(
+              (.os_version | gsub("OOS"; "") | tonumber) * -1,
+              .model
+            )
+          ')
+
+          if [ "$count" -eq 0 ]; then
+            echo "::error::No MediaTek android12-5.10 configs found!"
+            echo ""
+            echo "Available android12-5.10 configurations:"
+            jq -r '.[] | select(.android_version == "android12" and .kernel_version == "5.10") | "  - \(.model) (\(.os_version), \(.soc))"' matrix.json
+            exit 1
+          fi
+
+          echo "$filtered" | jq '.' > matrix.json
+
+          merged_matrix=$(jq -n --argjson devices "$filtered" --argjson ksu_list "$ksu_options_normalized" '[ $devices[] as $dev | $ksu_list[] as $ksu | ($dev + {ksu_type: $ksu.type, ksu_hash: $ksu.hash}) ]')
+
+          final_count=$(echo "$merged_matrix" | jq 'length')
+
+          echo "✅ Found $final_count MediaTek device(s) to build"
+          echo ""
+          echo "Selected devices:"
+          jq -r '.[] | "  - \(.model) (\(.os_version), \(.soc), \(.android_version)-\(.kernel_version), \(.ksu_type) - \(.ksu_hash))"' <<<"$merged_matrix"
+
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+
+          ksu_type=$(echo "$ksu_options_normalized" | jq -r '.[0].type')
+          ksu_ref=$(echo "$ksu_options_normalized" | jq -r '.[0].hash')
+
+          if [ "$ksu_type" == "KSUN" ]; then
+            KSU_REPO_OWNER="KernelSU-Next"
+            KSU_REPO_NAME="KernelSU-Next"
+          else
+            KSU_REPO_OWNER="tiann"
+            KSU_REPO_NAME="KernelSU"
+          fi
+
+          HEAD_REF="refs/heads/${ksu_ref}"
+          TAG_REF="refs/tags/${ksu_ref}"
+
+          QUERY='query($owner: String!, $name: String!, $headRef: String!, $tagRef: String!, $objRef: String!) {
+            repository(owner: $owner, name: $name) {
+              hb: ref(qualifiedName: $headRef) { t: target { ... on Commit { o: oid } } }
+              ht: ref(qualifiedName: $tagRef) { t: target { ... on Commit { o: oid } } }
+              ho: object(expression: $objRef) { ... on Commit { o: oid } }
+            }
+          }'
+
+          MAX_RETRIES=3
+          RETRY_COUNT=0
+          RETRY_DELAY=5
+
+          echo "Resolving $ksu_type hash ($ksu_ref)..."
+
+          until [ $RETRY_COUNT -ge $MAX_RETRIES ]; do
+            RESULT=$(gh api graphql -f query="$QUERY" -f owner="$KSU_REPO_OWNER" -f name="$KSU_REPO_NAME" -f headRef="$HEAD_REF" -f tagRef="$TAG_REF" -f objRef="$ksu_ref" 2>/dev/null)
+            EXIT_CODE=$?
+
+            if [ $EXIT_CODE -eq 0 ] && [ ! -z "$RESULT" ]; then
+              echo "  ✅ API Success"
+              break
+            fi
+
+            RETRY_COUNT=$((RETRY_COUNT + 1))
+            echo "::warning::API failed (Attempt $RETRY_COUNT/$MAX_RETRIES). Retrying in ${RETRY_DELAY}s..."
+            sleep $RETRY_DELAY
+          done
+
+          if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
+            echo "::error::GitHub API unreachable. Cannot validate $ksu_ref"
+            exit 1
+          fi
+
+          resolved_sha=$(echo "$RESULT" | jq -r '.data.repository | (.hb.t.o // .ht.t.o // .ho.o // "unknown")')
+
+          if [ "$resolved_sha" == "unknown" ]; then
+            echo "::error::Ref/Hash '$ksu_ref' does not exist in $KSU_REPO_OWNER/$KSU_REPO_NAME"
+            exit 1
+          fi
+
+          echo "  ✅ Resolved: $ksu_type/$ksu_ref → $resolved_sha"
+          echo "ksu_resolved_hash=$resolved_sha" >> "$GITHUB_OUTPUT"
+
+          merged_matrix=$(echo "$merged_matrix" | jq  --arg resolved_sha "$resolved_sha" 'map(.ksu_resolved_hash = $resolved_sha)')
+
+          # SUSFS hash fetch
+          SUSFS_REPO="https://gitlab.com/simonpunk/susfs4ksu.git"
+          GITLAB_PROJECT_PATH="simonpunk/susfs4ksu"
+
+          SUSFS_INPUT="${{ inputs.susfs_branch_or_commit }}"
+          if [ -z "$SUSFS_INPUT" ]; then
+            SUSFS_BRANCH="gki-android12-5.10"
+            echo "ℹ️  Using default SUSFS branch: $SUSFS_BRANCH"
+          else
+            SUSFS_BRANCH="$SUSFS_INPUT"
+            echo "🔧 Using user-specified SUSFS ref: $SUSFS_BRANCH"
+          fi
+
+          HASH_QUERY="{ project(fullPath: \"${GITLAB_PROJECT_PATH}\") { repository { ch: commit(ref: \"${SUSFS_BRANCH}\") { sha } } } }"
+          RELEASE_QUERY="{ project(fullPath: \"${GITLAB_PROJECT_PATH}\") { repository { ch: commit(ref: \"${SUSFS_BRANCH}\") { sha } blobs(paths: [\"kernel_patches/include/linux/susfs.h\"], ref: \"${SUSFS_BRANCH}\") { nodes { rawBlob } } } } }"
+
+          if [ "${{ inputs.make_release }}" = "true" ]; then
+            GL_QUERY="$RELEASE_QUERY"
+          else
+            GL_QUERY="$HASH_QUERY"
+          fi
+
+          MAX_RETRIES=3
+          RETRY_COUNT=0
+          RETRY_DELAY=5
+          resolved=""
+
+          until [ $RETRY_COUNT -ge $MAX_RETRIES ]; do
+            RESPONSE=$(curl -s --fail -G "https://gitlab.com/api/graphql" --data-urlencode "query=$GL_QUERY")
+            EXIT_CODE=$?
+
+            if [ $EXIT_CODE -eq 0 ] && [ -n "$RESPONSE" ]; then
+              resolved=$(echo "$RESPONSE" | jq -r '.data.project.repository.ch.sha // empty')
+              if [ -n "$resolved" ] && [ "$resolved" != "null" ]; then
+                echo "  ✅ SUSFS hash resolved"
+                break
+              fi
+            fi
+
+            RETRY_COUNT=$((RETRY_COUNT + 1))
+            echo "::warning::GitLab API failed (Attempt $RETRY_COUNT/$MAX_RETRIES). Retrying..."
+            sleep $RETRY_DELAY
+          done
+
+          if [ -z "$resolved" ] || [ "$resolved" = "null" ]; then
+            echo "::error::Could not resolve SUSFS ref '$SUSFS_BRANCH' on GitLab."
+            exit 1
+          fi
+
+          susfs_base_version="unknown"
+          if [ "${{ inputs.make_release }}" = "true" ]; then
+            extracted=$(echo "$RESPONSE" | jq -r '.data.project.repository.blobs.nodes[0].rawBlob // empty' | grep '#define SUSFS_VERSION' | awk -F'"' '{print $2}')
+            susfs_base_version="${extracted:-unknown}"
+            echo "  ✅ SUSFS_VERSION = $susfs_base_version"
+          fi
+
+          echo "  ✅ Resolved: SUSFS → $resolved"
+          echo "susfs_hash_android12_5_10=$resolved" >> "$GITHUB_OUTPUT"
+          echo "susfs_base_version=$susfs_base_version" >> "$GITHUB_OUTPUT"
+
+          active_gki_keys_csv="android12-5.10"
+          echo "active_gki_keys=$active_gki_keys_csv" >> "$GITHUB_OUTPUT"
+
+          susfs_hashes_json=$(jq -n --arg a12 "$resolved" '{ "android12-5.10": $a12 }')
+
+          merged_matrix=$(echo "$merged_matrix" | jq \
+            --argjson hashes "$susfs_hashes_json" \
+            '[.[] | . + {susfs_resolved_hash: ($hashes["\(.android_version)-\(.kernel_version)"] // "unknown")}]')
+
+          merged_matrix=$(echo "$merged_matrix" | jq '
+            sort_by(
+              (.os_version | gsub("OOS"; "") | tonumber? // 0) * -1,
+              .model
+            )
+          ')
+
+          wrapped=$(jq -n --argjson items "$merged_matrix" '{ include: $items }')
+          echo "matrix=$(jq -c . <<< "$wrapped")" >> "$GITHUB_OUTPUT"
+
+          echo "::endgroup::"
+
+      - name: Upload build matrix
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-matrix
+          path: matrix.json
+          archive: false
+          retention-days: 7
+
+  mirror_toolchain:
+    needs: set-op-model
+    if: ${{ inputs.mirror_toolchains }}
+    uses: ./.github/workflows/mirror-toolchains.yml
+    secrets: inherit
+
+  prepare_ccache:
+    name: Prepare ccache binary (download once)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download custom ccache once
+        run: |
+          set -uo pipefail
+          echo "::group::Download ccache"
+          url="https://raw.githubusercontent.com/WildKernels/kernel_patches/refs/heads/main/ccache/ccache-x86-64"
+          ok=0
+          for attempt in 1 2 3 4 5 6; do
+            if curl -LfsS --connect-timeout 30 --max-time 120 -H "User-Agent: Mozilla/5.0" "$url" -o ccache && [ -s ccache ]; then
+              ok=1; break
+            fi
+            echo "attempt $attempt failed; backing off..."
+            sleep $(( attempt * 5 + RANDOM % 6 ))
+          done
+          if [ "$ok" = 1 ]; then
+            echo "✅ downloaded ccache"
+          else
+            echo "::warning::ccache download failed; will use apt ccache"
+            rm -f ccache
+          fi
+          echo "::endgroup::"
+      - name: Upload ccache artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ccache-binary
+          path: ccache
+          retention-days: 1
+          if-no-files-found: warn
+
+  build:
+    name: build (${{ matrix.model }}, ${{ matrix.soc }}, ${{ matrix.android_version }}-${{ matrix.kernel_version }}, ${{ matrix.os_version }}, ${{ matrix.ksu_type }})
+    needs: [set-op-model, mirror_toolchain, prepare_ccache]
+    if: |
+      !cancelled() &&
+      needs.set-op-model.result == 'success' &&
+      (needs.mirror_toolchain.result == 'success' || needs.mirror_toolchain.result == 'skipped')
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.set-op-model.outputs.matrix) }}
+    outputs:
+      ksun_ver: ${{ steps.build-stat.outputs.ksu_version }}
+      ksu_ver: ${{ steps.build-stat.outputs.ksu_version }}
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: 🧹 Emergency Disk Cleanup
+        if: ${{ matrix.disk_cleanup }}
+        uses: ./.github/actions/disk-cleanup
+
+      - name: Install Minimal Dependencies
+        run: |
+          set -euo pipefail
+          echo "::group::Install dependencies"
+          sudo apt-get -o Acquire::Retries=3 update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            git curl ca-certificates build-essential clang lld flex bison \
+            libelf-dev libssl-dev libncurses-dev zlib1g-dev liblz4-tool \
+            libxml2-utils rsync unzip dwarves file python3 ccache jq bc dos2unix kmod libdw-dev elfutils pigz
+          sudo apt-get clean
+          echo "✅ Dependencies installed"
+          echo "::endgroup::"
+
+      - name: Get prebuilt ccache
+        uses: actions/download-artifact@v8
+        with:
+          name: ccache-binary
+          path: ccache-dl
+        continue-on-error: true
+
+      - name: Install ccache
+        run: |
+          set -uo pipefail
+          echo "::group::Install ccache"
+          if [ -s ccache-dl/ccache ]; then
+            sudo cp -f ccache-dl/ccache /usr/bin/ccache
+            sudo chmod +x /usr/bin/ccache
+            echo "✅ installed custom ccache"
+          else
+            echo "::warning::shared ccache artifact unavailable; using apt ccache"
+          fi
+          rm -rf ccache-dl
+          echo "::endgroup::"
+
+      - name: ♻️ Configure ccache & LTO cache (bounded)
+        run: |
+          echo "::group::Configure ccache environment"
+          set -euo pipefail
+          if command -v ccache >/dev/null 2>&1; then
+            CACHE_DIR="${{ github.workspace }}/.ccache"
+            LDCACHE_DIR="${{ github.workspace }}/.ld_cache"
+            mkdir -p "$CACHE_DIR"
+            mkdir -p "$LDCACHE_DIR"
+
+            SETTINGS=(
+              "CCACHE_DIR=$CACHE_DIR"
+              "LDCACHE_DIR=$LDCACHE_DIR"
+              "CCACHE_MAXSIZE=12G"
+              "CCACHE_COMPILERCHECK=content"
+              "CCACHE_BASEDIR=${GITHUB_WORKSPACE}"
+              "CCACHE_NOHASHDIR=true"
+              "CCACHE_IGNOREOPTIONS=--sysroot*"
+              "CCACHE_COMPRESSION=true"
+              "CCACHE_COMPRESSION_LEVEL=3"
+              "CCACHE_DIRECT=true"
+              "CCACHE_FILE_CLONE=true"
+              "CCACHE_INODE_CACHE=true"
+              "CCACHE_IS_KERNEL_COMPILING=true"
+              "CCACHE_UMASK=002"
+              "CCACHE_SLOPPINESS=file_macro,time_macros,include_file_mtime,include_file_ctime,pch_defines,system_headers,locale"
+            )
+
+            for setting in "${SETTINGS[@]}"; do
+              export "$setting"
+              echo "$setting" >> "$GITHUB_ENV"
+            done
+
+            if [ "${{ inputs.debug }}" == "true" ]; then
+              export "CCACHE_LOGFILE=${{ github.workspace }}/ccache.log"
+              echo "CCACHE_LOGFILE=${{ github.workspace }}/ccache.log" >> "$GITHUB_ENV"
+            fi
+
+            if ccache --help 2>&1 | grep -q 'depend_mode'; then
+              export CCACHE_DEPEND=true
+              echo "CCACHE_DEPEND=true" >> "$GITHUB_ENV"
+            fi
+
+            echo "✅ ccache configured"
+          else
+            echo "ccache not found, skipping."
+          fi
+          echo "::endgroup::"
+
+      - name: 🧹 Prepare op_config_json (without KSU fields)
+        id: prepare_config
+        shell: bash
+        run: |
+          echo "config_json=$(jq -nc --argjson m '${{ toJSON(matrix) }}' '$m | del(.ksu_type, .ksu_hash, .ksu_resolved_hash)')" >> "$GITHUB_OUTPUT"
+
+      - name: 🔨 Build Kernel
+        id: build
+        uses: ./.github/actions/build-kernel
+        with:
+          op_config_json: ${{ steps.prepare_config.outputs.config_json }}
+          ksu_type: ${{ matrix.ksu_type }}
+          ksu_branch_or_hash: ${{ matrix.ksu_resolved_hash }}
+          susfs_commit_hash_or_branch: ${{ matrix.susfs_resolved_hash }}
+          optimize_level: ${{ inputs.optimize_level }}
+          build_timestamp: ${{ inputs.build_timestamp }}
+          clean: ${{ inputs.clean_build }}
+          debug: ${{ inputs.debug }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 📊 Build statistics
+        id: build-stat
+        if: always()
+        run: |
+          echo "::group::Build Statistics"
+          echo "Device: ${{ matrix.model }} (${{ matrix.soc }})"
+          echo "Kernel: ${{ matrix.android_version }}-${{ matrix.kernel_version }}"
+          echo "Status: ${{ job.status }}"
+
+          if [ "${{ steps.build.outcome }}" = "success" ]; then
+            echo ""
+            echo "✅ Build completed successfully"
+            echo "  - Kernel: ${{ steps.build.outputs.kernel_version }}"
+            if [ "${{ matrix.ksu_type }}" = "KSUN" ]; then
+              echo "  - KSU Next: v${{ steps.build.outputs.ksu_version }}"
+              echo "ksun_ver=${{ steps.build.outputs.ksu_version }}" >> "$GITHUB_OUTPUT"
+              echo "ksu_ver=" >> "$GITHUB_OUTPUT"
+            else
+              echo "  - KSU: v${{ steps.build.outputs.ksu_version }}"
+              echo "ksun_ver=" >> "$GITHUB_OUTPUT"
+              echo "ksu_ver=${{ steps.build.outputs.ksu_version }}" >> "$GITHUB_OUTPUT"
+            fi
+            if [ "${{ matrix.susfs }}" = true ]; then
+              echo "  - SUSFS: ${{ steps.build.outputs.susfs_version }}"
+            fi
+            echo "  - Build time: ${{ steps.build.outputs.build_time }}s"
+
+            if [ "${{ inputs.clean_build }}" != "true" ]; then
+              echo "  - ccache hit rate: ${{ steps.build.outputs.ccache_hit_rate }}"
+            fi
+          else
+            echo "❌ Build failed"
+          fi
+
+          echo "::endgroup::"
+
+      - name: 📝 Job summary
+        if: always()
+        run: |
+          cat >> $GITHUB_STEP_SUMMARY << EOF
+
+          ### ${{ matrix.model }} (${{ matrix.soc }}) - ${{ matrix.os_version }} - ${{ job.status == 'success' && '✅ Success' || '❌ Failed' }}
+
+          **Kernel:** ${{ matrix.android_version }}-${{ matrix.kernel_version }}
+          EOF
+
+          if [ "${{ steps.build.outcome }}" = "success" ]; then
+            cat >> $GITHUB_STEP_SUMMARY << EOF
+          | Metric | Value |
+          |--------|-------|
+          | **Kernel** | ${{ steps.build.outputs.kernel_version }} |
+          EOF
+            if [ "${{ matrix.ksu_type }}" = "KSUN" ]; then
+              echo "| **KSU Next** | v${{ steps.build.outputs.ksu_version }} |" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "| **KSU** | v${{ steps.build.outputs.ksu_version }} |" >> $GITHUB_STEP_SUMMARY
+            fi
+            if [ "${{ matrix.susfs }}" = true ]; then
+              echo "| **SUSFS** | ${{ steps.build.outputs.susfs_version }} |" >> $GITHUB_STEP_SUMMARY
+            fi
+            echo "| **Build Time** | ${{ steps.build.outputs.build_time }}s |" >> $GITHUB_STEP_SUMMARY
+            echo "| **Image SHA256** | \`${{ steps.build.outputs.image_sha256 }}\` |" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: 🧹 Final cleanup and space report
+        if: always()
+        run: |
+          echo "::group::Cleanup"
+          sudo rm -rf "$GITHUB_WORKSPACE/out" || true
+          sudo rm -rf "$GITHUB_WORKSPACE/build" || true
+          sudo rm -rf "$GITHUB_WORKSPACE/kernel/out" || true
+          sudo rm -rf "$GITHUB_WORKSPACE/.repo" || true
+          sudo rm -rf /tmp/* || true
+
+          if command -v ccache >/dev/null 2>&1; then
+            echo ""
+            echo "📊 ccache statistics after build:"
+            ccache -s
+          fi
+
+          echo ""
+          echo "💽 Final disk usage:"
+          df -h /
+          echo "::endgroup::"
+
+  trigger-release:
+    needs: [set-op-model, build]
+    runs-on: ubuntu-latest
+    if: |
+      !cancelled() &&
+      inputs.make_release == true &&
+      needs.build.result == 'success' &&
+      needs.set-op-model.result == 'success'
+    env:
+      REPO_OWNER: ${{ github.repository_owner }}
+      REPO_NAME: ${{ github.event.repository.name }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      SUSFS_BASE_VERSION: ${{ needs.set-op-model.outputs.susfs_base_version }}
+      RELEASE_NAME: 'MediaTek android12-5.10 Kernels With KernelSU Next & SUSFS ${{ needs.set-op-model.outputs.susfs_base_version }}'
+    steps:
+      - name: 📥 Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: 🏷️ Generate and Create New Tag
+        run: |
+          LATEST_MATCHING_TAG=$(gh api repos/$REPO_OWNER/$REPO_NAME/tags \
+            --jq "[.[] | select(.name | startswith(\"${SUSFS_BASE_VERSION}-r\"))] \
+                  | sort_by(.name | split(\"-r\")[1] | tonumber) \
+                  | last | .name // empty")
+
+          if [ -z "$LATEST_MATCHING_TAG" ]; then
+            NEW_TAG="${SUSFS_BASE_VERSION}-r1"
+          else
+            NEW_TAG=$(echo "$LATEST_MATCHING_TAG" | awk -F'-r' '{printf "%s-r%d", $1, $2+1}')
+          fi
+
+          echo "New tag: $NEW_TAG"
+          echo "NEW_TAG=${NEW_TAG}" >> $GITHUB_ENV
+          git tag $NEW_TAG
+          git push origin $NEW_TAG
+
+      - name: 📥 Download Artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: ./downloaded-artifacts
+          merge-multiple: true
+          skip-decompress: true
+
+      - name: 📝 Generate Release Notes
+        id: generate-notes
+        run: |
+          rm -f ./downloaded-artifacts/ccache-binary.zip
+
+          declare -A device_info
+
+          for file in $(find downloaded-artifacts -maxdepth 1 -name "*.zip" -type f | sort); do
+            if [ -f "$file" ]; then
+              zipname=$(basename "$file" .zip)
+              rest="${zipname#AK3_}"
+              IFS='_' read -ra parts <<< "$rest"
+              model="${parts[0]}"
+              os_version="${parts[1]}"
+              kernel_version="${parts[2]}"
+              ksu_type="${parts[3]}"
+              ksu_ver="${parts[4]}"
+              if [ "${parts[5]:-}" = "SuSFS" ]; then
+                susfs_ver="${parts[6]:-unknown}"
+              else
+                susfs_ver="none"
+              fi
+              full_model="${model}_${os_version}_${kernel_version}"
+              device_info["$full_model"]="$model|$os_version|$kernel_version|$ksu_type|$ksu_ver|$susfs_ver|$zipname"
+            fi
+          done
+
+          ksu_type="${{ fromJSON(needs.set-op-model.outputs.ksu_options_normalized)[0].type }}"
+
+          cat << EOF > release_notes.md
+          # MediaTek android12-5.10 Kernels with KernelSU Next & SUSFS $SUSFS_BASE_VERSION
+
+          > **Build Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+
+          ---
+
+          ## 📱 Built Devices (${#device_info[@]} total)
+
+          | Model | OS | Kernel | Features |
+          |-------|-----|--------|----------|
+          EOF
+
+          while IFS= read -r full_key; do
+            [ -z "$full_key" ] && continue
+            IFS='|' read -r model os_ver kernel_ver _ _ _ zipfile <<< "${device_info["$full_key"]}"
+            download_url="https://github.com/${REPO_OWNER}/${REPO_NAME}/releases/download/${NEW_TAG}/${zipfile}.zip"
+            model_link="[$model]($download_url)"
+            printf "| %s | %s | %s | KSU+SUSFS |\n" "$model_link" "$os_ver" "$kernel_ver" >> release_notes.md
+          done < <(printf '%s\n' "${!device_info[@]}" | sort)
+
+          cat << EOF >> release_notes.md
+
+          ---
+
+          **Manager:** [KernelSU Next Manager](https://github.com/KernelSU-Next/KernelSU-Next/releases)
+          **SUSFS Module:** [ksu_module_susfs](https://github.com/sidex15/ksu_module_susfs/releases)
+          **Flasher:** [Kernel Flasher](https://github.com/fatalcoder524/KernelFlasher/releases)
+          EOF
+
+      - name: 📤 Upload Release Assets
+        run: |
+          cd downloaded-artifacts
+          for file in *.zip; do
+            [ -f "$file" ] && gh release upload "$NEW_TAG" "$file" --clobber
+          done
+
+      - name: 📝 Update Release Notes
+        run: |
+          gh release edit "$NEW_TAG" \
+            --notes-file release_notes.md \
+            --title "$RELEASE_NAME"
