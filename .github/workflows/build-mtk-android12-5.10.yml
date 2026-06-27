@@ -271,56 +271,33 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.set-op-model.outputs.matrix) }}
     outputs:
-      ksun_ver: ${{ steps.build-stat.outputs.ksu_version }}
-      ksu_ver: ${{ steps.build-stat.outputs.ksu_version }}
+      ksun_ver: ${{ steps.build.outputs.ksu_version }}
+      ksu_ver: ${{ steps.build.outputs.ksu_version }}
     steps:
       - name: 📥 Checkout Code
         uses: actions/checkout@v6
         with:
           fetch-depth: 1
 
-      - name: 🧹 Emergency Disk Cleanup
-        if: ${{ matrix.disk_cleanup }}
-        uses: ./.github/actions/disk-cleanup
-
-      - name: Install Minimal Dependencies
+      - name: 🧹 Prepare op_config_json (without KSU fields)
+        id: prepare_config
+        shell: bash
         run: |
-          set -euo pipefail
-          echo "::group::Install dependencies"
-          sudo apt-get -o Acquire::Retries=3 update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-            git curl ca-certificates build-essential clang lld flex bison \
-            libelf-dev libssl-dev libncurses-dev zlib1g-dev liblz4-tool \
-            libxml2-utils rsync unzip dwarves file python3 ccache jq bc dos2unix kmod libdw-dev elfutils pigz
-          sudo apt-get clean
-          echo "✅ Dependencies installed"
-          echo "::endgroup::"
+          echo "config_json=$(jq -nc --argjson m '${{ toJSON(matrix) }}' '$m | del(.ksu_type, .ksu_hash, .ksu_resolved_hash)')" >> "$GITHUB_OUTPUT"
 
-      - name: Get prebuilt ccache
-        uses: actions/download-artifact@v8
+      - name: 🔨 Build Kernel
+        id: build
+        uses: ./.github/actions/build-kernel
         with:
-          name: ccache-binary
-          path: ccache-dl
-        continue-on-error: true
-
-      - name: Install ccache
-        run: |
-          set -uo pipefail
-          echo "::group::Install ccache"
-          if [ -s ccache-dl/ccache ]; then
-            sudo cp -f ccache-dl/ccache /usr/bin/ccache
-            sudo chmod +x /usr/bin/ccache
-            echo "✅ installed custom ccache"
-          else
-            echo "::warning::shared ccache artifact unavailable; using apt ccache"
-          fi
-          rm -rf ccache-dl
-          echo "::endgroup::"
-
-      - name: ♻️ Skip ccache (no cache = no upload issues)
-        run: |
-          echo "ccache disabled — building from scratch every time"
-          echo "CCACHE_DIR=/dev/null" >> "$GITHUB_ENV"
+          op_config_json: ${{ steps.prepare_config.outputs.config_json }}
+          ksu_type: ${{ matrix.ksu_type }}
+          ksu_branch_or_hash: ${{ matrix.ksu_resolved_hash }}
+          susfs_commit_hash_or_branch: ${{ matrix.susfs_resolved_hash }}
+          optimize_level: O2
+          build_timestamp: ''
+          clean: true
+          debug: false
+          github_token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: 📝 Job summary
         if: always()
@@ -349,27 +326,6 @@ jobs:
             echo "| **Build Time** | ${{ steps.build.outputs.build_time }}s |" >> $GITHUB_STEP_SUMMARY
             echo "| **Image SHA256** | \`${{ steps.build.outputs.image_sha256 }}\` |" >> $GITHUB_STEP_SUMMARY
           fi
-
-      - name: 🧹 Final cleanup and space report
-        if: always()
-        run: |
-          echo "::group::Cleanup"
-          sudo rm -rf "$GITHUB_WORKSPACE/out" || true
-          sudo rm -rf "$GITHUB_WORKSPACE/build" || true
-          sudo rm -rf "$GITHUB_WORKSPACE/kernel/out" || true
-          sudo rm -rf "$GITHUB_WORKSPACE/.repo" || true
-          sudo rm -rf /tmp/* || true
-
-          if command -v ccache >/dev/null 2>&1; then
-            echo ""
-            echo "📊 ccache statistics after build:"
-            ccache -s
-          fi
-
-          echo ""
-          echo "💽 Final disk usage:"
-          df -h /
-          echo "::endgroup::"
 
   trigger-release:
     needs: [set-op-model, build]
