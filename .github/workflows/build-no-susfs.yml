@@ -1,0 +1,185 @@
+name: Build MediaTek android12-5.10 (no SUSFS)
+
+permissions:
+  contents: write
+  actions: write
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: 'Device model'
+        required: true
+        type: choice
+        options:
+          - All MediaTek
+          - OP10r
+          - OP-ACE
+          - OP-ACE-RACE
+          - OP-ACE-2V
+          - OP-NORD-3
+          - OP-PAD-MT6983
+          - OP-PAD-LITE
+        default: OP10r
+      make_release:
+        description: 'Create a release?'
+        required: true
+        type: boolean
+        default: false
+
+jobs:
+  set-op-model:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.set-matrix.outputs.matrix }}
+      device_count: ${{ steps.set-matrix.outputs.count }}
+      active_gki_keys: ${{ steps.set-matrix.outputs.active_gki_keys }}
+      susfs_hash_android12_5_10: ${{ steps.set-matrix.outputs.susfs_hash_android12_5_10 }}
+      ksu_resolved_hash: ${{ steps.set-matrix.outputs.ksu_resolved_hash }}
+      ksu_options_normalized: ${{ steps.set-matrix.outputs.ksu_options_normalized }}
+      susfs_base_version: ${{ steps.set-matrix.outputs.susfs_base_version }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_HTTP_TIMEOUT: 600
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v6
+        with:
+          sparse-checkout: configs/
+          sparse-checkout-cone-mode: false
+
+      - name: 🔍 Generate build matrix
+        id: set-matrix
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "::group::Matrix generation"
+
+          ksu_options_normalized='[{"type":"KSUN","hash":"dev"}]'
+          echo "ksu_options_normalized=$ksu_options_normalized" >> $GITHUB_OUTPUT
+
+          echo "[" > matrix.json
+          mapfile -t all_json_files < <(find configs/ -name "*.json" -print0 | xargs -0 -n1)
+          for i in "${!all_json_files[@]}"; do
+            file="${all_json_files[$i]}"
+            if [ -f "$file" ]; then
+              jq -r '.' "$file" >> matrix.json
+              if [ $((i+1)) -lt ${#all_json_files[@]} ]; then
+                echo "," >> matrix.json
+              fi
+            fi
+          done
+          echo "]" >> matrix.json
+
+          jq_filter='map(select(.os_version == "OOS15" or .os_version == "OOS16")) | map(select(.android_version == "android12" and .kernel_version == "5.10")) | map(select(.soc | test("dimensity|helio|mt6"; "i")))'
+
+          selected_model="${{ github.event.inputs.model }}"
+          if [ "$selected_model" != "All MediaTek" ]; then
+            jq_filter="$jq_filter | map(select(.model == \"$selected_model\"))"
+          fi
+
+          filtered=$(jq -c "$jq_filter" matrix.json)
+          count=$(jq 'length' <<<"$filtered")
+          filtered=$(echo "$filtered" | jq 'sort_by((.os_version | gsub("OOS"; "") | tonumber) * -1, .model)')
+
+          if [ "$count" -eq 0 ]; then
+            echo "::error::No configs found!"
+            exit 1
+          fi
+
+          echo "$filtered" | jq '.' > matrix.json
+          merged_matrix=$(jq -n --argjson devices "$filtered" --argjson ksu_list "$ksu_options_normalized" '[ $devices[] as $dev | $ksu_list[] as $ksu | ($dev + {ksu_type: $ksu.type, ksu_hash: $ksu.hash}) ]')
+
+          ksu_type="KSUN"
+          ksu_ref="dev"
+          KSU_REPO_OWNER="KernelSU-Next"
+          KSU_REPO_NAME="KernelSU-Next"
+
+          resolved_sha="7bce6ea5e67d2f0cc380a8af13f165c9de3df55d"
+          echo "  ✅ Using hardcoded KSU hash: $resolved_sha"
+          echo "ksu_resolved_hash=$resolved_sha" >> "$GITHUB_OUTPUT"
+
+          merged_matrix=$(echo "$merged_matrix" | jq --arg resolved_sha "$resolved_sha" 'map(.ksu_resolved_hash = $resolved_sha)')
+
+          SUSFS_HASH="4003ecf2d01c6d13fa8edf6c4f2607365738dc3d"
+          echo "  ✅ Using hardcoded SUSFS hash: $SUSFS_HASH"
+          echo "susfs_hash_android12_5_10=" >> "$GITHUB_OUTPUT"
+          echo "susfs_base_version=v2.2.0" >> "$GITHUB_OUTPUT"
+          echo "active_gki_keys=android12-5.10" >> "$GITHUB_OUTPUT"
+
+          merged_matrix=$(echo "$merged_matrix" | jq --arg hashes "{\"android12-5.10\":\"$SUSFS_HASH\"}" '[.[] | . + {susfs_resolved_hash: ($hashes["\(.android_version)-\(.kernel_version)"] // "unknown")}]')
+
+          wrapped=$(jq -n --argjson items "$merged_matrix" '{ include: $items }')
+          echo "matrix=$(jq -c . <<< "$wrapped")" >> "$GITHUB_OUTPUT"
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "::endgroup::"
+
+      - name: Upload build matrix
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-matrix
+          path: matrix.json
+          archive: false
+          retention-days: 7
+
+  build:
+    name: build (${{ matrix.model }}, ${{ matrix.soc }}, ${{ matrix.android_version }}-${{ matrix.kernel_version }}, ${{ matrix.os_version }}, ${{ matrix.ksu_type }})
+    needs: [set-op-model]
+    if: |
+      !cancelled() &&
+      needs.set-op-model.result == 'success'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.set-op-model.outputs.matrix) }}
+    steps:
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Install ccache
+        run: sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ccache
+
+      - name: Set ccache env vars
+        run: |
+          echo "CCACHE_DIR=${{ github.workspace }}/.ccache" >> "$GITHUB_ENV"
+          echo "LDCACHE_DIR=${{ github.workspace }}/.ld_cache" >> "$GITHUB_ENV"
+
+      - name: 🧹 Prepare op_config_json
+        id: prepare_config
+        shell: bash
+        run: |
+          echo "config_json=$(jq -nc --argjson m '${{ toJSON(matrix) }}' '$m | del(.ksu_type, .ksu_hash, .ksu_resolved_hash) | .susfs = false')" >> "$GITHUB_OUTPUT"
+
+      - name: 🔨 Build Kernel
+        id: build
+        uses: ./.github/actions/build-kernel
+        with:
+          op_config_json: ${{ steps.prepare_config.outputs.config_json }}
+          ksu_type: ${{ matrix.ksu_type }}
+          ksu_branch_or_hash: ${{ matrix.ksu_resolved_hash }}
+          susfs_commit_hash_or_branch: ""
+          optimize_level: O2
+          build_timestamp: ''
+          clean: true
+          debug: false
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 📝 Job summary
+        if: always()
+        run: |
+          cat >> $GITHUB_STEP_SUMMARY << EOF
+          ### ${{ matrix.model }} (${{ matrix.soc }}) - ${{ matrix.os_version }} - ${{ job.status == 'success' && '✅ Success' || '❌ Failed' }}
+          **Kernel:** ${{ matrix.android_version }}-${{ matrix.kernel_version }}
+          EOF
+          if [ "${{ steps.build.outcome }}" = "success" ]; then
+            cat >> $GITHUB_STEP_SUMMARY << EOF
+          | Metric | Value |
+          |--------|-------|
+          | **Kernel** | ${{ steps.build.outputs.kernel_version }} |
+          | **KSU Next** | v${{ steps.build.outputs.ksu_version }} |
+          | **Build Time** | ${{ steps.build.outputs.build_time }}s |
+          | **Image SHA256** | \`${{ steps.build.outputs.image_sha256 }}\` |
+          EOF
+          fi
