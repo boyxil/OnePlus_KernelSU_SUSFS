@@ -282,6 +282,11 @@ jobs:
       - name: Install ccache
         run: sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ccache
 
+      - name: Set ccache env vars
+        run: |
+          echo "CCACHE_DIR=${{ github.workspace }}/.ccache" >> "$GITHUB_ENV"
+          echo "LDCACHE_DIR=${{ github.workspace }}/.ld_cache" >> "$GITHUB_ENV"
+
       - name: 🧹 Prepare op_config_json (without KSU fields)
         id: prepare_config
         shell: bash
