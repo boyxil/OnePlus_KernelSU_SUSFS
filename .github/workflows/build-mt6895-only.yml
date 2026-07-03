@@ -45,7 +45,7 @@ on:
         type: string
         default: ''
       susfs_branch:
-        description: 'SUSFS branch or commit hash (empty = auto-detect)'
+        description: 'SUSFS branch or commit hash (empty = gki-android12-5.10)'
         type: string
         default: ''
       enable_ds:
@@ -215,8 +215,7 @@ jobs:
 
           merged_matrix=$(echo "$merged_matrix" | jq --arg resolved_sha "$resolved_sha" 'map(.ksu_resolved_hash = $resolved_sha)')
 
-          # SUSFS hash fetch
-          SUSFS_REPO="https://gitlab.com/simonpunk/susfs4ksu.git"
+          # SUSFS hash fetch (mirrors upstream build-mtk-android12-5.10.yml logic)
           GITLAB_PROJECT_PATH="simonpunk/susfs4ksu"
 
           SUSFS_INPUT="${{ github.event.inputs.susfs_branch }}"
@@ -224,45 +223,38 @@ jobs:
             SUSFS_BRANCH="$SUSFS_INPUT"
             echo "🔧 Using user-specified SUSFS: $SUSFS_BRANCH"
           else
-            SUSFS_BRANCH="main"
-            echo "🔧 Using default SUSFS branch: main"
+            SUSFS_BRANCH="gki-android12-5.10"
+            echo "ℹ️  Using default SUSFS branch: $SUSFS_BRANCH"
           fi
 
-          GITLAB_GQL_URL="https://gitlab.com/api/graphql"
-          GITLAB_QUERY='query($projectPath: ID!, $ref: String!) {
-            project(fullPath: $projectPath) {
-              repository {
-                blobs(ref: $ref, paths: ["susfs.h"]) {
-                  nodes { rawBlob }
-                }
-                tree(ref: $ref) {
-                  lastCommit { sha }
-                }
-              }
-            }
-          }'
+          HASH_QUERY="{ project(fullPath: \"${GITLAB_PROJECT_PATH}\") { repository { ch: commit(ref: \"${SUSFS_BRANCH}\") { sha } } } }"
+          RELEASE_QUERY="{ project(fullPath: \"${GITLAB_PROJECT_PATH}\") { repository { ch: commit(ref: \"${SUSFS_BRANCH}\") { sha } blobs(paths: [\"kernel_patches/include/linux/susfs.h\"], ref: \"${SUSFS_BRANCH}\") { nodes { rawBlob } } } } }"
+
+          if [ "${{ inputs.make_release }}" = "true" ]; then
+            GL_QUERY="$RELEASE_QUERY"
+          else
+            GL_QUERY="$HASH_QUERY"
+          fi
 
           MAX_RETRIES=3
           RETRY_COUNT=0
           RETRY_DELAY=5
-
-          echo "Resolving SUSFS hash ($SUSFS_BRANCH)..."
+          resolved=""
 
           until [ $RETRY_COUNT -ge $MAX_RETRIES ]; do
-            RESPONSE=$(curl -s --max-time 30 -H "Content-Type: application/json" \
-              -X POST "$GITLAB_GQL_URL" \
-              -d "{\"query\": \"$GITLAB_QUERY\", \"variables\": {\"projectPath\": \"$GITLAB_PROJECT_PATH\", \"ref\": \"$SUSFS_BRANCH\"}}" 2>/dev/null)
+            RESPONSE=$(curl -s --fail -G "https://gitlab.com/api/graphql" --data-urlencode "query=$GL_QUERY")
             EXIT_CODE=$?
 
-            resolved=$(echo "$RESPONSE" | jq -r '.data.project.repository.tree.lastCommit.sha // empty' 2>/dev/null)
-
-            if [ $EXIT_CODE -eq 0 ] && [ -n "$resolved" ] && [ "$resolved" != "null" ]; then
-              echo "  ✅ GitLab API Success"
-              break
+            if [ $EXIT_CODE -eq 0 ] && [ -n "$RESPONSE" ]; then
+              resolved=$(echo "$RESPONSE" | jq -r '.data.project.repository.ch.sha // empty')
+              if [ -n "$resolved" ] && [ "$resolved" != "null" ]; then
+                echo "  ✅ SUSFS hash resolved"
+                break
+              fi
             fi
 
             RETRY_COUNT=$((RETRY_COUNT + 1))
-            echo "::warning::GitLab API failed (Attempt $RETRY_COUNT/$MAX_RETRIES). Retrying in ${RETRY_DELAY}s..."
+            echo "::warning::GitLab API failed (Attempt $RETRY_COUNT/$MAX_RETRIES). Retrying..."
             sleep $RETRY_DELAY
           done
 
