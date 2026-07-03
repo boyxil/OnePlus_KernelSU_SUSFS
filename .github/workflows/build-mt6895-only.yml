@@ -1,4 +1,15 @@
-name: Build MediaTek android12-5.10
+name: Build mt6895-only (RMX3561-compatible)
+
+# Builds kernels ONLY for MediaTek mt6895 / dimensity8000 devices
+# (OP-ACE-RACE, OP-ACE, OP10r and their 5.10.x variants).
+# All of these share the wild/mt6895 kernel source and therefore boot on
+# the Realme RMX3561 (RED8BEL1) as well.
+#
+# Includes a `enable_ds` switch:
+#   false (default) -> kernel built WITHOUT CONFIG_SYSVIPC -> VINTF passes
+#                      -> no "internal problem with your device" dialog
+#   true            -> kernel built WITH Droidspaces (CONFIG_SYSVIPC=y)
+#                      -> VINTF fails -> dialog appears (needs ro.treble.enabled=false workaround)
 
 permissions:
   contents: write
@@ -8,19 +19,19 @@ on:
   workflow_dispatch:
     inputs:
       model:
-        description: 'Device model'
+        description: 'Device model (all share mt6895 kernel source, all boot on RMX3561)'
         required: true
         type: choice
         options:
-          - All MediaTek
-          - OP10r
-          - OP-ACE
+          - All mt6895
           - OP-ACE-RACE
-          - OP-ACE-2V
-          - OP-NORD-3
-          - OP-PAD-MT6983
-          - OP-PAD-LITE
-        default: All MediaTek
+          - OP-ACE-RACE-5.10.209
+          - OP-ACE-RACE-5.10.226
+          - OP-ACE
+          - OP-ACE-5.10.209
+          - OP-ACE-5.10.226
+          - OP10r
+        default: All mt6895
       ksu_type:
         description: 'KernelSU variant'
         required: true
@@ -30,13 +41,18 @@ on:
           - KSU (original)
         default: KSUN (KernelSU-Next)
       ksu_branch:
-        description: 'KSU branch or commit hash (empty = v3.2.0 for KSUN, main for KSU)'
+        description: 'KSU branch or commit hash (empty = auto: KSUN boyxil fixed SHA, KSU main)'
         type: string
         default: ''
       susfs_branch:
         description: 'SUSFS branch or commit hash (empty = auto-detect)'
         type: string
         default: ''
+      enable_ds:
+        description: 'Enable Droidspaces (CONFIG_SYSVIPC=y)? OFF = no VINTF dialog (recommended for stock-like boots)'
+        required: true
+        type: boolean
+        default: false
       make_release:
         description: 'Create a release?'
         required: true
@@ -49,7 +65,6 @@ jobs:
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
       device_count: ${{ steps.set-matrix.outputs.count }}
-      active_gki_keys: ${{ steps.set-matrix.outputs.active_gki_keys }}
       susfs_hash_android12_5_10: ${{ steps.set-matrix.outputs.susfs_hash_android12_5_10 }}
       ksu_resolved_hash: ${{ steps.set-matrix.outputs.ksu_resolved_hash }}
       ksu_options_normalized: ${{ steps.set-matrix.outputs.ksu_options_normalized }}
@@ -65,12 +80,12 @@ jobs:
             configs/
           sparse-checkout-cone-mode: false
 
-      - name: 🔍 Generate build matrix (MediaTek android12-5.10 only)
+      - name: 🔍 Generate build matrix (mt6895 / dimensity8000 only)
         id: set-matrix
         shell: bash
         run: |
           set -euo pipefail
-          echo "::group::Matrix generation"
+          echo "::group::Matrix generation (mt6895 only)"
 
           # Resolve KSU type and branch from inputs
           ksu_type_input="${{ github.event.inputs.ksu_type }}"
@@ -83,6 +98,7 @@ jobs:
           ksu_branch_input="${{ github.event.inputs.ksu_branch }}"
           if [ -z "$ksu_branch_input" ]; then
             if [ "$ksu_type" = "KSUN" ]; then
+              # boyxil fork fixed branch (SELinux fix)
               ksu_ref="7400d69d41b5ecb2570cc41104b60db310bd42ff"
             else
               ksu_ref="main"
@@ -101,26 +117,25 @@ jobs:
             file="${all_json_files[$i]}"
             if [ -f "$file" ]; then
               jq -r '.' "$file" >> matrix.json
-              if [ $((i+1)) -lt ${#all_json_files[@]} ]; then
+              if [ $((i+1)) -lt ${#all_json_files[@]}; then
                 echo "," >> matrix.json
               fi
             fi
           done
           echo "]" >> matrix.json
 
-          # Filter: android12 + 5.10 + A15/A16 (formerly OOS15/OOS16) + MediaTek SoC only
-          jq_filter='map(select(.os_version == "A15" or .os_version == "A16" or .os_version == "OOS15" or .os_version == "OOS16")) | map(select(.android_version == "android12" and .kernel_version == "5.10")) | map(select(.soc | test("dimensity|helio|mt6"; "i")))'
+          # Filter: ONLY mt6895 / dimensity8000, branch wild/mt6895, android12-5.10, A15/A16 (+ legacy OOS)
+          jq_filter='map(select(.os_version == "A15" or .os_version == "A16" or .os_version == "OOS15" or .os_version == "OOS16")) | map(select(.android_version == "android12" and .kernel_version == "5.10")) | map(select(.soc == "dimensity8000")) | map(select(.branch == "wild/mt6895"))'
 
-          # Model filter
           selected_model="${{ github.event.inputs.model }}"
-          if [ "$selected_model" != "All MediaTek" ]; then
+          if [ "$selected_model" != "All mt6895" ]; then
             jq_filter="$jq_filter | map(select(.model == \"$selected_model\"))"
             echo "ℹ️  Model: $selected_model"
           else
-            echo "ℹ️  Building ALL MediaTek android12-5.10 devices"
+            echo "ℹ️  Building ALL mt6895 / dimensity8000 devices (android12-5.10)"
           fi
 
-          echo "ℹ️  Filter: android12-5.10, A15+A16 (and legacy OOS15/OOS16), MediaTek SoCs only"
+          echo "ℹ️  Filter: mt6895 only (dimensity8000 + wild/mt6895 + android12-5.10)"
 
           filtered=$(jq -c "$jq_filter" matrix.json)
           count=$(jq 'length' <<<"$filtered")
@@ -133,10 +148,10 @@ jobs:
           ')
 
           if [ "$count" -eq 0 ]; then
-            echo "::error::No MediaTek android12-5.10 configs found!"
+            echo "::error::No mt6895 / dimensity8000 android12-5.10 configs found!"
             echo ""
-            echo "Available android12-5.10 configurations:"
-            jq -r '.[] | select(.android_version == "android12" and .kernel_version == "5.10") | "  - \(.model) (\(.os_version), \(.soc))"' matrix.json
+            echo "Available mt6895 configurations:"
+            jq -r '.[] | select(.soc == "dimensity8000" and .branch == "wild/mt6895") | "  - \(.model) (\(.os_version), \(.soc))"' matrix.json
             exit 1
           fi
 
@@ -145,8 +160,7 @@ jobs:
           merged_matrix=$(jq -n --argjson devices "$filtered" --argjson ksu_list "$ksu_options_normalized" '[ $devices[] as $dev | $ksu_list[] as $ksu | ($dev + {ksu_type: $ksu.type, ksu_hash: $ksu.hash}) ]')
 
           final_count=$(echo "$merged_matrix" | jq 'length')
-
-          echo "✅ Found $final_count MediaTek device(s) to build"
+          echo "✅ Found $final_count mt6895 device(s) to build"
           echo ""
           echo "Selected devices:"
           jq -r '.[] | "  - \(.model) (\(.os_version), \(.soc), \(.android_version)-\(.kernel_version), \(.ksu_type) - \(.ksu_hash))"' <<<"$merged_matrix"
@@ -192,22 +206,22 @@ jobs:
             sleep $RETRY_DELAY
           done
 
-          if [ $RETRY_COUNT -eq $MAX_RETRIES ]; then
-            echo "::error::GitHub API unreachable. Cannot validate $ksu_ref"
-            exit 1
-          fi
-
-          resolved_sha=$(echo "$RESULT" | jq -r '.data.repository | (.hb.t.o // .ht.t.o // .ho.o // "unknown")')
-
-          if [ "$resolved_sha" == "unknown" ]; then
-            echo "::error::Ref/Hash '$ksu_ref' does not exist in $KSU_REPO_OWNER/$KSU_REPO_NAME"
-            exit 1
+          if [ $RETRY_COUNT -ge $MAX_RETRIES ]; then
+            # Fall back: assume the hash is already a SHA
+            resolved_sha="$ksu_ref"
+            echo "::warning::GitHub API unreachable. Assuming '$ksu_ref' is a valid SHA."
+          else
+            resolved_sha=$(echo "$RESULT" | jq -r '.data.repository | (.hb.t.o // .ht.t.o // .ho.o // "unknown")')
+            if [ "$resolved_sha" == "unknown" ]; then
+              echo "::error::Ref/Hash '$ksu_ref' does not exist in $KSU_REPO_OWNER/$KSU_REPO_NAME"
+              exit 1
+            fi
           fi
 
           echo "  ✅ Resolved: $ksu_type/$ksu_ref → $resolved_sha"
           echo "ksu_resolved_hash=$resolved_sha" >> "$GITHUB_OUTPUT"
 
-          merged_matrix=$(echo "$merged_matrix" | jq  --arg resolved_sha "$resolved_sha" 'map(.ksu_resolved_hash = $resolved_sha)')
+          merged_matrix=$(echo "$merged_matrix" | jq --arg resolved_sha "$resolved_sha" 'map(.ksu_resolved_hash = $resolved_sha)')
 
           # SUSFS hash fetch
           SUSFS_REPO="https://gitlab.com/simonpunk/susfs4ksu.git"
@@ -218,38 +232,45 @@ jobs:
             SUSFS_BRANCH="$SUSFS_INPUT"
             echo "🔧 Using user-specified SUSFS: $SUSFS_BRANCH"
           else
-            SUSFS_BRANCH="gki-android12-5.10"
-            echo "ℹ️  Using default SUSFS branch: $SUSFS_BRANCH"
+            SUSFS_BRANCH="main"
+            echo "🔧 Using default SUSFS branch: main"
           fi
 
-          HASH_QUERY="{ project(fullPath: \"${GITLAB_PROJECT_PATH}\") { repository { ch: commit(ref: \"${SUSFS_BRANCH}\") { sha } } } }"
-          RELEASE_QUERY="{ project(fullPath: \"${GITLAB_PROJECT_PATH}\") { repository { ch: commit(ref: \"${SUSFS_BRANCH}\") { sha } blobs(paths: [\"kernel_patches/include/linux/susfs.h\"], ref: \"${SUSFS_BRANCH}\") { nodes { rawBlob } } } } }"
-
-          if [ "${{ inputs.make_release }}" = "true" ]; then
-            GL_QUERY="$RELEASE_QUERY"
-          else
-            GL_QUERY="$HASH_QUERY"
-          fi
+          GITLAB_GQL_URL="https://gitlab.com/api/graphql"
+          GITLAB_QUERY='query($projectPath: ID!, $ref: String!) {
+            project(fullPath: $projectPath) {
+              repository {
+                blobs(ref: $ref, paths: ["susfs.h"]) {
+                  nodes { rawBlob }
+                }
+                tree(ref: $ref) {
+                  lastCommit { sha }
+                }
+              }
+            }
+          }'
 
           MAX_RETRIES=3
           RETRY_COUNT=0
           RETRY_DELAY=5
-          resolved=""
+
+          echo "Resolving SUSFS hash ($SUSFS_BRANCH)..."
 
           until [ $RETRY_COUNT -ge $MAX_RETRIES ]; do
-            RESPONSE=$(curl -s --fail -G "https://gitlab.com/api/graphql" --data-urlencode "query=$GL_QUERY")
+            RESPONSE=$(curl -s --max-time 30 -H "Content-Type: application/json" \
+              -X POST "$GITLAB_GQL_URL" \
+              -d "{\"query\": \"$GITLAB_QUERY\", \"variables\": {\"projectPath\": \"$GITLAB_PROJECT_PATH\", \"ref\": \"$SUSFS_BRANCH\"}}" 2>/dev/null)
             EXIT_CODE=$?
 
-            if [ $EXIT_CODE -eq 0 ] && [ -n "$RESPONSE" ]; then
-              resolved=$(echo "$RESPONSE" | jq -r '.data.project.repository.ch.sha // empty')
-              if [ -n "$resolved" ] && [ "$resolved" != "null" ]; then
-                echo "  ✅ SUSFS hash resolved"
-                break
-              fi
+            resolved=$(echo "$RESPONSE" | jq -r '.data.project.repository.tree.lastCommit.sha // empty' 2>/dev/null)
+
+            if [ $EXIT_CODE -eq 0 ] && [ -n "$resolved" ] && [ "$resolved" != "null" ]; then
+              echo "  ✅ GitLab API Success"
+              break
             fi
 
             RETRY_COUNT=$((RETRY_COUNT + 1))
-            echo "::warning::GitLab API failed (Attempt $RETRY_COUNT/$MAX_RETRIES). Retrying..."
+            echo "::warning::GitLab API failed (Attempt $RETRY_COUNT/$MAX_RETRIES). Retrying in ${RETRY_DELAY}s..."
             sleep $RETRY_DELAY
           done
 
@@ -268,9 +289,6 @@ jobs:
           echo "  ✅ Resolved: SUSFS → $resolved"
           echo "susfs_hash_android12_5_10=$resolved" >> "$GITHUB_OUTPUT"
           echo "susfs_base_version=$susfs_base_version" >> "$GITHUB_OUTPUT"
-
-          active_gki_keys_csv="android12-5.10"
-          echo "active_gki_keys=$active_gki_keys_csv" >> "$GITHUB_OUTPUT"
 
           susfs_hashes_json=$(jq -n --arg a12 "$resolved" '{ "android12-5.10": $a12 }')
 
@@ -293,13 +311,13 @@ jobs:
       - name: Upload build matrix
         uses: actions/upload-artifact@v7
         with:
-          name: build-matrix
+          name: build-matrix-mt6895
           path: matrix.json
           archive: false
           retention-days: 7
 
   build:
-    name: build (${{ matrix.model }}, ${{ matrix.soc }}, ${{ matrix.android_version }}-${{ matrix.kernel_version }}, ${{ matrix.os_version }}, ${{ matrix.ksu_type }})
+    name: build (${{ matrix.model }}, ${{ matrix.soc }}, ${{ matrix.android_version }}-${{ matrix.kernel_version }}, ${{ matrix.os_version }}, ${{ matrix.ksu_type }}, ds=${{ github.event.inputs.enable_ds }})
     needs: [set-op-model]
     if: |
       !cancelled() &&
@@ -311,6 +329,8 @@ jobs:
     outputs:
       ksun_ver: ${{ steps.build.outputs.ksu_version }}
       ksu_ver: ${{ steps.build.outputs.ksu_version }}
+    env:
+      ENABLE_DS: ${{ github.event.inputs.enable_ds }}
     steps:
       - name: 📥 Checkout Code
         uses: actions/checkout@v6
@@ -344,11 +364,17 @@ jobs:
           CCACHE_SLOPPINESS=file_macro,time_macros,include_file_mtime,include_file_ctime,pch_defines,system_headers,locale
           EOF
 
-      - name: 🧹 Prepare op_config_json (without KSU fields)
+      - name: 🧹 Prepare op_config_json (override ds by switch, strip KSU fields)
         id: prepare_config
         shell: bash
         run: |
-          echo "config_json=$(jq -nc --argjson m '${{ toJSON(matrix) }}' '$m | del(.ksu_type, .ksu_hash, .ksu_resolved_hash)')" >> "$GITHUB_OUTPUT"
+          # Take the matrix entry, override the `ds` field per the workflow input,
+          # then strip KSU-only fields before passing to build-kernel action.
+          # ds=false  -> Add Droidspaces step is skipped -> no CONFIG_SYSVIPC -> VINTF passes
+          # ds=true   -> Droidspaces added -> CONFIG_SYSVIPC=y -> VINTF dialog appears
+          config_json=$(jq -nc --argjson m '${{ toJSON(matrix) }}' --argjson ds "${ENABLE_DS:-false}" '$m | .ds = $ds | del(.ksu_type, .ksu_hash, .ksu_resolved_hash)')
+          echo "config_json=$config_json" >> "$GITHUB_OUTPUT"
+          echo "Effective ds = ${ENABLE_DS:-false} (workflow override)"
 
       - name: 🔨 Build Kernel
         id: build
@@ -372,6 +398,7 @@ jobs:
           ### ${{ matrix.model }} (${{ matrix.soc }}) - ${{ matrix.os_version }} - ${{ job.status == 'success' && '✅ Success' || '❌ Failed' }}
 
           **Kernel:** ${{ matrix.android_version }}-${{ matrix.kernel_version }}
+          **Droidspaces (ds):** ${{ github.event.inputs.enable_ds }} ${{ github.event.inputs.enable_ds == 'false' && '(no CONFIG_SYSVIPC → no VINTF dialog)' || '(CONFIG_SYSVIPC=y → VINTF dialog)' }}
           EOF
 
           if [ "${{ steps.build.outcome }}" = "success" ]; then
@@ -405,7 +432,8 @@ jobs:
       REPO_NAME: ${{ github.event.repository.name }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       SUSFS_BASE_VERSION: ${{ needs.set-op-model.outputs.susfs_base_version }}
-      RELEASE_NAME: 'MediaTek android12-5.10 Kernels With KernelSU Next & SUSFS ${{ needs.set-op-model.outputs.susfs_base_version }}'
+      ENABLE_DS: ${{ github.event.inputs.enable_ds }}
+      RELEASE_NAME: 'mt6895 (RMX3561-compatible) Kernels with KernelSU Next & SUSFS ${{ needs.set-op-model.outputs.susfs_base_version }}'
     steps:
       - name: 📥 Checkout code
         uses: actions/checkout@v6
@@ -414,13 +442,15 @@ jobs:
 
       - name: 🏷️ Generate and Create New Tag
         run: |
+          DS_SUFFIX=""
+          if [ "$ENABLE_DS" = "true" ]; then DS_SUFFIX="-ds"; fi
           LATEST_MATCHING_TAG=$(gh api repos/$REPO_OWNER/$REPO_NAME/tags \
-            --jq "[.[] | select(.name | startswith(\"${SUSFS_BASE_VERSION}-r\"))] \
+            --jq "[.[] | select(.name | startswith(\"mt6895${DS_SUFFIX}-${SUSFS_BASE_VERSION}-r\"))] \
                   | sort_by(.name | split(\"-r\")[1] | tonumber) \
                   | last | .name // empty")
 
           if [ -z "$LATEST_MATCHING_TAG" ]; then
-            NEW_TAG="${SUSFS_BASE_VERSION}-r1"
+            NEW_TAG="mt6895${DS_SUFFIX}-${SUSFS_BASE_VERSION}-r1"
           else
             NEW_TAG=$(echo "$LATEST_MATCHING_TAG" | awk -F'-r' '{printf "%s-r%d", $1, $2+1}')
           fi
@@ -466,11 +496,22 @@ jobs:
 
           ksu_type="${{ fromJSON(needs.set-op-model.outputs.ksu_options_normalized)[0].type }}"
 
+          DS_NOTE=""
+          if [ "$ENABLE_DS" = "true" ]; then
+            DS_NOTE="
+
+          > ⚠️ **Droidspaces ENABLED** — these kernels have CONFIG_SYSVIPC=y and will show the \"internal problem with your device\" dialog on stock-like boots. Use the ro.treble.enabled=false workaround module to suppress it."
+          else
+            DS_NOTE="
+
+          > ✅ **Droidspaces DISABLED** — no CONFIG_SYSVIPC, VINTF passes, no dialog. Safe for stock-like boots (RMX3561)."
+          fi
+
           cat << EOF > release_notes.md
-          # MediaTek android12-5.10 Kernels with KernelSU Next & SUSFS $SUSFS_BASE_VERSION
+          # mt6895 (RMX3561-compatible) Kernels with KernelSU Next & SUSFS $SUSFS_BASE_VERSION
 
           > **Build Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')
-
+          ${DS_NOTE}
           ---
 
           ## 📱 Built Devices (${#device_info[@]} total)
@@ -494,6 +535,10 @@ jobs:
           **Manager:** [KernelSU Next Manager](https://github.com/KernelSU-Next/KernelSU-Next/releases)
           **SUSFS Module:** [ksu_module_susfs](https://github.com/sidex15/ksu_module_susfs/releases)
           **Flasher:** [Kernel Flasher](https://github.com/fatalcoder524/KernelFlasher/releases)
+
+          ### ℹ️ About this build
+          All kernels here share the `wild/mt6895` (dimensity8000) source and boot on the
+          Realme RMX3561 (RED8BEL1) as well as the OnePlus Ace Race / Ace / 10r.
           EOF
 
       - name: 📤 Upload Release Assets
