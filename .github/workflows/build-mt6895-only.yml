@@ -111,18 +111,10 @@ jobs:
           echo "ksu_options_normalized=$ksu_options_normalized" >> $GITHUB_OUTPUT
           echo "ℹ️  KSU: $ksu_type ($ksu_ref)"
 
-          echo "[" > matrix.json
-          mapfile -t all_json_files < <(find configs/ -name "*.json" -print0 | xargs -0 -n1)
-          for i in "${!all_json_files[@]}"; do
-            file="${all_json_files[$i]}"
-            if [ -f "$file" ]; then
-              jq -r '.' "$file" >> matrix.json
-              if [ $((i+1)) -lt ${#all_json_files[@]}; then
-                echo "," >> matrix.json
-              fi
-            fi
-          done
-          echo "]" >> matrix.json
+          # Robustly assemble all config JSONs into a single array via jq slurp.
+          # (The hand-rolled echo/loop assembly is fragile on the runner.)
+          jq -s '.' $(find configs/ -name "*.json" -print0 | xargs -0) > matrix.json
+          echo "Loaded $(jq 'length' matrix.json) total configs"
 
           # Filter: ONLY mt6895 / dimensity8000, branch wild/mt6895, android12-5.10, A15/A16 (+ legacy OOS)
           jq_filter='map(select(.os_version == "A15" or .os_version == "A16" or .os_version == "OOS15" or .os_version == "OOS16")) | map(select(.android_version == "android12" and .kernel_version == "5.10")) | map(select(.soc == "dimensity8000")) | map(select(.branch == "wild/mt6895"))'
