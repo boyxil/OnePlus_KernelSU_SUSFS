@@ -1,6 +1,10 @@
 name: 'Build OnePlus Kernel with KernelSU Next'
 
 inputs:
+  kernel_patches_ref:
+    description: 'WildKernels/kernel_patches ref (default: main)'
+    required: false
+    default: ''
   op_config_json:
     description: 'JSON string containing full device config'
     required: true
@@ -866,7 +870,13 @@ runs:
           return 1
         }
         
-        retry_clone "https://github.com/WildKernels/kernel_patches.git" "main" "1"
+        # kernel_patches main stopped pinning susfs on 2026-09-07 (4285cd1) and
+        # now floats to the branch head, which is v2.3.0 and no longer matches the
+        # fix_*.patch set. Allow an explicit ref to reproduce a known-good pairing.
+        KERNEL_PATCHES_REF="${{ inputs.kernel_patches_ref }}"
+        KERNEL_PATCHES_REF="${KERNEL_PATCHES_REF:-main}"
+        echo "::group::kernel_patches ref: $KERNEL_PATCHES_REF"
+        retry_clone "https://github.com/WildKernels/kernel_patches.git" "$KERNEL_PATCHES_REF" "1"
         
         if [ "${{ env.OP_SUSFS }}" = true ]; then
           echo "Using SUSFS branch/commit: $SUSFS_BRANCH"

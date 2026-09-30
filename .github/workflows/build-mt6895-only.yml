@@ -48,6 +48,10 @@ on:
         description: 'SUSFS branch or commit hash (empty = gki-android12-5.10)'
         type: string
         default: ''
+      kernel_patches_ref:
+        description: 'WildKernels/kernel_patches ref (default: main)'
+        type: string
+        default: ''
       enable_ds:
         description: 'Enable Droidspaces (CONFIG_SYSVIPC=y)? OFF = no VINTF dialog (recommended for stock-like boots)'
         required: true
@@ -368,6 +372,7 @@ jobs:
           ksu_type: ${{ matrix.ksu_type }}
           ksu_branch_or_hash: ${{ matrix.ksu_resolved_hash }}
           susfs_commit_hash_or_branch: ${{ github.event.inputs.susfs_branch || matrix.susfs_resolved_hash }}
+          kernel_patches_ref: ${{ github.event.inputs.kernel_patches_ref }}
           optimize_level: O2
           build_timestamp: ''
           clean: true
