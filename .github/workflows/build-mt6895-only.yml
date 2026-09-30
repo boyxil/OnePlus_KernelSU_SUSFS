@@ -45,9 +45,9 @@ on:
         type: string
         default: ''
       susfs_branch:
-        description: 'SUSFS branch or commit hash (empty = gki-android12-5.10)'
+        description: 'SUSFS branch or commit hash. Pinned to the last commit carrying v2.2.0, which is the newest version build-kernel has fix-patches for; the branch head is v2.3.0 and CI rejects it.'
         type: string
-        default: ''
+        default: 'd4c3914bc2e4'
       kernel_patches_ref:
         description: 'WildKernels/kernel_patches ref (default: main)'
         type: string
