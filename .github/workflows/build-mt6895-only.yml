@@ -56,6 +56,10 @@ on:
         description: 'GitHub owner of the KernelSU-Next fork to build from'
         type: string
         default: ''
+      disable_susfs:
+        description: 'Build without SuSFS even if the config enables it (for A/B diagnosis)'
+        type: boolean
+        default: false
       enable_ds:
         description: 'Enable Droidspaces (CONFIG_SYSVIPC=y)? OFF = no VINTF dialog (recommended for stock-like boots)'
         required: true
@@ -364,7 +368,7 @@ jobs:
           # then strip KSU-only fields before passing to build-kernel action.
           # ds=false  -> Add Droidspaces step is skipped -> no CONFIG_SYSVIPC -> VINTF passes
           # ds=true   -> Droidspaces added -> CONFIG_SYSVIPC=y -> VINTF dialog appears
-          config_json=$(jq -nc --argjson m '${{ toJSON(matrix) }}' --argjson ds "${ENABLE_DS:-false}" '$m | .ds = $ds | del(.ksu_type, .ksu_hash, .ksu_resolved_hash)')
+          config_json=$(jq -nc --argjson m '${{ toJSON(matrix) }}' --argjson ds "${ENABLE_DS:-false}" --argjson nosusfs "${{ github.event.inputs.disable_susfs == 'true' }}" '$m | .ds = $ds | if $nosusfs then .susfs = false else . end | del(.ksu_type, .ksu_hash, .ksu_resolved_hash)')
           echo "config_json=$config_json" >> "$GITHUB_OUTPUT"
           echo "Effective ds = ${ENABLE_DS:-false} (workflow override)"
 
