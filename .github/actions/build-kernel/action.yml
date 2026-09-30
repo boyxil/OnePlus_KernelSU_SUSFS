@@ -922,6 +922,27 @@ runs:
         echo "✅ Dependencies cloned"
         echo "::endgroup::"
 
+    - name: Revert MediaTek CMDQ jump to relative (RMX3561 firmware)
+      shell: bash
+      run: |
+        set -uo pipefail
+        CMDQ="$KERNEL_PLATFORM_FOLDER/common/drivers/soc/mediatek/mtk-cmdq-helper.c"
+        [ -f "$CMDQ" ] || CMDQ="$KERNEL_PLATFORM_FOLDER/drivers/soc/mediatek/mtk-cmdq-helper.c"
+        if [ ! -f "$CMDQ" ]; then
+          echo "::warning::mtk-cmdq-helper.c not found; skipping"
+          exit 0
+        fi
+        if grep -q 'CMDQ_JUMP_ABSOLUTE' "$CMDQ"; then
+          echo "Patching CMDQ jump: absolute -> relative"
+          sed -i -e 's/#define CMDQ_JUMP_RELATIVE	0/#define CMDQ_JUMP_RELATIVE	1/' \
+                 -e 's/^#define CMDQ_JUMP_ABSOLUTE	1$/#define CMDQ_JUMP_ABSOLUTE	0/' \
+                 -e 's/inst.offset = CMDQ_JUMP_ABSOLUTE;/inst.offset = CMDQ_JUMP_RELATIVE;/' "$CMDQ"
+          grep -nE 'CMDQ_JUMP_(RELATIVE|ABSOLUTE)|inst.offset = CMDQ_JUMP' "$CMDQ" | head -4
+          echo "CMDQ jump reverted to relative"
+        else
+          echo "CMDQ already relative; nothing to do"
+        fi
+
     - name: Clean Up ABI Protected Exports
       shell: bash
       run: |
