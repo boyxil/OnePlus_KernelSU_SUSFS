@@ -922,6 +922,34 @@ runs:
         echo "✅ Dependencies cloned"
         echo "::endgroup::"
 
+    - name: Allow dotdot firmware paths (MTK tfa98xx diagnostic)
+      shell: bash
+      run: |
+        set -uo pipefail
+        MAIN=""
+        for cand in "$KERNEL_PLATFORM_FOLDER/common/drivers/base/firmware_loader/main.c" \
+                    "$KERNEL_PLATFORM_FOLDER/drivers/base/firmware_loader/main.c"; do
+          [ -f "$cand" ] && MAIN="$cand" && break
+        done
+        if [ -z "$MAIN" ]; then
+          echo "::warning::firmware_loader/main.c not found; skipping"
+          exit 0
+        fi
+        if ! grep -q 'name_contains_dotdot' "$MAIN"; then
+          echo "dotdot check absent; nothing to do"
+          exit 0
+        fi
+        echo "Patching firmware_loader: relaxing dotdot guard"
+        # DIAGNOSTIC ONLY. Upstream 5.10.236 added name_contains_dotdot() to block
+        # path traversal, but MTK's tfa98xx codec requests its firmware as
+        # '../../odm/firmware/tfa98xx.cnt', so the guard rejects it with -22,
+        # leaving the codec profile list empty and audio silent. Relax it to prove
+        # the causal link before deciding how to scope the exception properly.
+        sed -i 's/if (name_contains_dotdot(name)) {/if (0 \&\& name_contains_dotdot(name)) {/' "$MAIN"
+        sed -i 's/^static bool name_contains_dotdot(/__maybe_unused static bool name_contains_dotdot(/' "$MAIN"
+        grep -nE 'if \(0 && name_contains_dotdot|__maybe_unused static bool name_contains_dotdot' "$MAIN" | head -2
+        echo "dotdot guard relaxed"
+
     - name: Revert MediaTek CMDQ jump to relative (RMX3561 firmware)
       shell: bash
       run: |
