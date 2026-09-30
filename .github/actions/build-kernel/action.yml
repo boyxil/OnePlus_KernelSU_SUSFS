@@ -800,7 +800,11 @@ runs:
           local download_url=""
           if [[ "$url" == *"github.com"* ]]; then
               codeload_host="${url#https://github.com/}"; codeload_host="codeload.github.com/${codeload_host%.git}"
-              download_url="https://${codeload_host}/tar.gz/refs/heads/${branch}"
+              if [[ "$branch" =~ ^[0-9a-f]{40}$ ]]; then
+                  download_url="https://${codeload_host}/tar.gz/${branch}"
+              else
+                  download_url="https://${codeload_host}/tar.gz/refs/heads/${branch}"
+              fi
           elif [[ "$url" == *"gitlab.com"* ]]; then
               download_url="${url%.git}/-/archive/${branch}/${repo_name}-${branch}.tar.gz"
           else
