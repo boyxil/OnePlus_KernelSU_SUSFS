@@ -1100,7 +1100,7 @@ runs:
                 fix_patch="$KERNEL_PATCHES_FOLDER/next/susfs_fix_patches/$susfs_version/fix_$file.patch"
                 if [ -f "$fix_patch" ]; then
                   echo "Patching file: $file with fix_$file.patch"
-                  patch -p1 --forward < "$fix_patch"
+                  patch -p1 --forward < "$fix_patch" || echo "::warning::fix_$file.patch did not apply cleanly; continuing (reject left in place)"
                 else
                   echo "::warning::No fix patch for $file (fix_$file.patch not in kernel_patches); leaving reject in place"
                 fi
@@ -1130,7 +1130,7 @@ runs:
                 fix_patch="$KERNEL_PATCHES_FOLDER/next/susfs_fix_patches/$susfs_version/fix_$file.patch"
                 if [ -f "$fix_patch" ]; then
                   echo "Patching file: $file with fix_$file.patch"
-                  patch -p1 --forward < "$fix_patch"
+                  patch -p1 --forward < "$fix_patch" || echo "::warning::fix_$file.patch did not apply cleanly; continuing (reject left in place)"
                 else
                   echo "::warning::No fix patch for $file (fix_$file.patch not in kernel_patches); leaving reject in place"
                 fi
@@ -1160,7 +1160,7 @@ runs:
                 fix_patch="$KERNEL_PATCHES_FOLDER/next/susfs_fix_patches/$susfs_version/fix_$file.patch"
                 if [ -f "$fix_patch" ]; then
                   echo "Patching file: $file with fix_$file.patch"
-                  patch -p1 --forward < "$fix_patch"
+                  patch -p1 --forward < "$fix_patch" || echo "::warning::fix_$file.patch did not apply cleanly; continuing (reject left in place)"
                 else
                   echo "::warning::No fix patch for $file (fix_$file.patch not in kernel_patches); leaving reject in place"
                 fi
