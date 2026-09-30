@@ -1327,7 +1327,7 @@ runs:
       shell: bash
       run: |
         set -uo pipefail
-        KSUN_DIR="$KERNEL_PLATFORM_DIR/KernelSU-Next/kernel"
+        KSUN_DIR="$KERNEL_PLATFORM_FOLDER/KernelSU-Next/kernel"
         SRC="$KSUN_DIR/feature/selinux_hide.c"
         if [ ! -f "$SRC" ]; then echo "::warning::$SRC not found; skipping avc sync"; exit 0; fi
         if grep -q "fake_state.avc = selinux_state.avc" "$SRC"; then
