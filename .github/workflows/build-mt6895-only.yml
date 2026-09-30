@@ -367,7 +367,7 @@ jobs:
           op_config_json: ${{ steps.prepare_config.outputs.config_json }}
           ksu_type: ${{ matrix.ksu_type }}
           ksu_branch_or_hash: ${{ matrix.ksu_resolved_hash }}
-          susfs_commit_hash_or_branch: ${{ matrix.susfs_resolved_hash }}
+          susfs_commit_hash_or_branch: ${{ github.event.inputs.susfs_branch || matrix.susfs_resolved_hash }}
           optimize_level: O2
           build_timestamp: ''
           clean: true
