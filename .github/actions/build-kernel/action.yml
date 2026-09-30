@@ -945,7 +945,9 @@ runs:
         # fork is unresolvable. Point it at the fork we actually want.
         KSU_REPO_OWNER="${{ inputs.ksu_repo_owner }}"
         KSU_REPO_OWNER="${KSU_REPO_OWNER:-KernelSU-Next}"
-        KSU_SETUP_URL="https://raw.githubusercontent.com/${KSU_REPO_OWNER}/KernelSU-Next/fixed/kernel/setup.sh"
+        # setup.sh only exists on our fork's 'fixed' branch; the clone target is
+        # controlled separately by KSU_REPO_OWNER.
+        KSU_SETUP_URL="https://raw.githubusercontent.com/boyxil/KernelSU-Next/fixed/kernel/setup.sh"
         if [ -z "$KSU_INPUT" ]; then
           curl --fail --location --proto '=https' -LSs "$KSU_SETUP_URL" | sed -e "s|^OWNER=.*|OWNER=\"$KSU_REPO_OWNER\"|" -e "s|^REPO=.*|REPO=\"KernelSU-Next\"|" | bash -
         else
