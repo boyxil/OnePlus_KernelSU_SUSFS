@@ -876,7 +876,15 @@ runs:
         KERNEL_PATCHES_REF="${{ inputs.kernel_patches_ref }}"
         KERNEL_PATCHES_REF="${KERNEL_PATCHES_REF:-main}"
         echo "::group::kernel_patches ref: $KERNEL_PATCHES_REF"
-        retry_clone "https://github.com/WildKernels/kernel_patches.git" "$KERNEL_PATCHES_REF" "1"
+        if [[ "$KERNEL_PATCHES_REF" =~ ^[0-9a-f]{7,40}$ ]]; then
+          if git clone --filter=blob:none "https://github.com/WildKernels/kernel_patches.git" kernel_patches 2>&1 | tail -2; then
+            cd kernel_patches && git fetch --depth 1 origin "$KERNEL_PATCHES_REF" 2>&1 | tail -1 && git checkout -q FETCH_HEAD 2>&1 | tail -1 && cd .. && echo "kernel_patches pinned to $KERNEL_PATCHES_REF" || { echo "::error::failed to pin kernel_patches"; exit 1; }
+          else
+            echo "::error::kernel_patches clone failed"; exit 1
+          fi
+        else
+          retry_clone "https://github.com/WildKernels/kernel_patches.git" "$KERNEL_PATCHES_REF" "1"
+        fi
         
         if [ "${{ env.OP_SUSFS }}" = true ]; then
           echo "Using SUSFS branch/commit: $SUSFS_BRANCH"
