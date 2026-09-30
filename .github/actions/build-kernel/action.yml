@@ -870,7 +870,28 @@ runs:
         
         if [ "${{ env.OP_SUSFS }}" = true ]; then
           echo "Using SUSFS branch/commit: $SUSFS_BRANCH"
-          if ! retry_fetch_archive "https://gitlab.com/simonpunk/susfs4ksu.git" "$SUSFS_BRANCH"; then
+          # gitlab.com blocks archive downloads from GitHub Actions runner IPs, and
+          # the github mirrors do not carry the pre-v2.3 commits. Prefer a pinned
+          # tarball published on our own toolchain-cache release when the requested
+          # ref has one; otherwise fall back to the upstream sources.
+          SUSFS_PINNED_ASSET="https://github.com/${{ github.repository }}/releases/download/toolchain-cache/susfs_${SUSFS_BRANCH:0:8}.tar.gz"
+          if curl -IsL --max-time 20 -o /dev/null -w '%{http_code}' "$SUSFS_PINNED_ASSET" 2>/dev/null | grep -q 200; then
+            echo "::group::Fetch pinned SUSFS from toolchain-cache"
+            echo "Using pinned asset for $SUSFS_BRANCH"
+            if aria2c -x8 -s8 -j4 --retry-wait=2 --max-tries=5 -d "/dev/shm" -o "susfs_pinned.tar.gz" --allow-overwrite=true "$SUSFS_PINNED_ASSET"; then
+              mkdir -p susfs4ksu
+              if tar -I "pigz -p $(nproc 2>/dev/null || echo 4) -b 256" -x --record-size=1M -f "/dev/shm/susfs_pinned.tar.gz" -C susfs4ksu --strip-components=1 --no-same-owner; then
+                rm -f /dev/shm/susfs_pinned.tar.gz
+                echo "Pinned SUSFS archive synced"
+              else
+                echo "::error::Failed to extract pinned SUSFS archive"; exit 1
+              fi
+            else
+              echo "::error::Failed to download pinned SUSFS archive"; exit 1
+            fi
+            echo "::endgroup::"
+            SUSFS_DIR="$GITHUB_WORKSPACE/susfs4ksu"
+          elif ! retry_fetch_archive "https://gitlab.com/simonpunk/susfs4ksu.git" "$SUSFS_BRANCH"; then
             echo "::error::Failed to fetch SUSFS archive after multiple attempts"
             exit 1
           fi
