@@ -41,9 +41,9 @@ on:
           - KSU (original)
         default: KSUN (KernelSU-Next)
       ksu_branch:
-        description: 'KSU branch or commit hash (empty = auto: KSUN boyxil fixed SHA, KSU main)'
+        description: 'KSU branch or commit hash. Defaults to 234f6e04 (KSUN 33239), the last commit SuSFS v2.2.0 builds against; the branch now floats to 33313, whose hook_manager API SuSFS v2.2.0 does not patch.'
         type: string
-        default: ''
+        default: '234f6e040fcbca18b16d2398e1aa225712ec99ad'
       susfs_branch:
         description: 'SUSFS branch or commit hash. Pinned to the last commit carrying v2.2.0, which is the newest version build-kernel has fix-patches for; the branch head is v2.3.0 and CI rejects it.'
         type: string
