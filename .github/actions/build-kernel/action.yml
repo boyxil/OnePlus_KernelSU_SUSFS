@@ -1323,6 +1323,37 @@ runs:
         
         echo "::endgroup::"
 
+    - name: Sync fake_state.avc (KSU GKI selinux fix)
+      shell: bash
+      run: |
+        set -uo pipefail
+        KSUN_DIR="$KERNEL_PLATFORM_DIR/KernelSU-Next/kernel"
+        SRC="$KSUN_DIR/feature/selinux_hide.c"
+        if [ ! -f "$SRC" ]; then echo "::warning::$SRC not found; skipping avc sync"; exit 0; fi
+        if grep -q "fake_state.avc = selinux_state.avc" "$SRC"; then
+          echo "avc sync already present, nothing to do"
+          exit 0
+        fi
+        # Applied AFTER the susfs patch on purpose: editing the KSU source
+        # beforehand lands inside a susfs hunk's context and makes that hunk
+        # fail, which leaves selinux_hide.c half-patched and uncompilable.
+        python3 - "$SRC" <<'PYEOF'
+        import sys
+        path = sys.argv[1]
+        src = open(path, encoding="utf-8").read()
+        anchor = "    fake_state.policy = backup_sepolicy;"
+        if anchor not in src:
+            print("::warning::anchor not found in selinux_hide.c; skipping avc sync")
+            sys.exit(0)
+        add = (anchor + "\n"
+               "    // Sync AVC state; without it avc_has_perm -> avc_lookup dereferences NULL\n"
+               "    // and oopses the kernel on the first write to /sys/fs/selinux/context.\n"
+               "    fake_state.avc = selinux_state.avc;")
+        src = src.replace(anchor, add, 1)
+        open(path, "w", encoding="utf-8").write(src)
+        print("fake_state.avc sync injected")
+        PYEOF
+
     - name: Add BBG
       if: ${{ env.OP_BBG == 'true' }}
       shell: bash
