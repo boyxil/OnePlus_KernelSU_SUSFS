@@ -947,9 +947,9 @@ runs:
         KSU_REPO_OWNER="${KSU_REPO_OWNER:-KernelSU-Next}"
         KSU_SETUP_URL="https://raw.githubusercontent.com/${KSU_REPO_OWNER}/KernelSU-Next/fixed/kernel/setup.sh"
         if [ -z "$KSU_INPUT" ]; then
-          curl --fail --location --proto '=https' -LSs "$KSU_SETUP_URL" | sed "s|^OWNER=.*|OWNER=\"$KSU_REPO_OWNER\"|" | bash -
+          curl --fail --location --proto '=https' -LSs "$KSU_SETUP_URL" | sed -e "s|^OWNER=.*|OWNER=\"$KSU_REPO_OWNER\"|" -e "s|^REPO=.*|REPO=\"KernelSU-Next\"|" | bash -
         else
-          curl --fail --location --proto '=https' -LSs "$KSU_SETUP_URL" | sed "s|^OWNER=.*|OWNER=\"$KSU_REPO_OWNER\"|" | bash -s "$KSU_INPUT"
+          curl --fail --location --proto '=https' -LSs "$KSU_SETUP_URL" | sed -e "s|^OWNER=.*|OWNER=\"$KSU_REPO_OWNER\"|" -e "s|^REPO=.*|REPO=\"KernelSU-Next\"|" | bash -s "$KSU_INPUT"
         fi
         git submodule update --init --recursive
         cd KernelSU-Next/kernel
