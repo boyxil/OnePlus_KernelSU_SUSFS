@@ -799,11 +799,15 @@ runs:
               aria_log_flags="--summary-interval=5" # Show progress every 5s in debug
           fi
           
+          # The browser User-Agent is required to get past GitHub's CDN, but
+          # GitLab aborts the connection when it sees one. Pick per host.
           local aria2_headers=(
-            "--header=User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             "--header=Accept: */*"
             "--header=Connection: keep-alive"
           )
+          if [[ "$url" == *"github.com"* ]]; then
+              aria2_headers+=("--header=User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+          fi
           
           local download_url=""
           if [[ "$url" == *"github.com"* ]]; then
