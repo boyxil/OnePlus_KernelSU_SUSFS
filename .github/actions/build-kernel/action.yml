@@ -922,7 +922,7 @@ runs:
         echo "✅ Dependencies cloned"
         echo "::endgroup::"
 
-    - name: Allow dotdot firmware paths (MTK tfa98xx diagnostic)
+    - name: Allow vendor firmware paths (MTK tfa98xx)
       shell: bash
       run: |
         set -uo pipefail
@@ -936,19 +936,87 @@ runs:
           exit 0
         fi
         if ! grep -q 'name_contains_dotdot' "$MAIN"; then
-          echo "dotdot check absent; nothing to do"
+          echo "dotdot guard absent; nothing to do"
           exit 0
         fi
-        echo "Patching firmware_loader: relaxing dotdot guard"
-        # DIAGNOSTIC ONLY. Upstream 5.10.236 added name_contains_dotdot() to block
-        # path traversal, but MTK's tfa98xx codec requests its firmware as
-        # '../../odm/firmware/tfa98xx.cnt', so the guard rejects it with -22,
-        # leaving the codec profile list empty and audio silent. Relax it to prove
-        # the causal link before deciding how to scope the exception properly.
-        sed -i 's/if (name_contains_dotdot(name)) {/if (0 \&\& name_contains_dotdot(name)) {/' "$MAIN"
-        sed -i 's/^static bool name_contains_dotdot(/__maybe_unused static bool name_contains_dotdot(/' "$MAIN"
-        grep -nE 'if \(0 && name_contains_dotdot|__maybe_unused static bool name_contains_dotdot' "$MAIN" | head -2
-        echo "dotdot guard relaxed"
+        echo "Patching firmware_loader: vendor firmware exception"
+        # Upstream 5.10.226+ added name_contains_dotdot(), which refuses any
+        # firmware name containing a '..' component. The MTK tfa98xx speaker
+        # codec on mt6895 requests its firmware as '../../odm/firmware/tfa98xx.cnt',
+        # so the load fails with -EINVAL, the codec profile list stays empty,
+        # hw_params ends in XRUN and the speaker goes silent.
+        #
+        # We do NOT disable the guard: it is a real path-traversal defence and
+        # other drivers depend on it. Instead we add a narrow exception that
+        # allows only names confined to a fixed set of vendor firmware roots,
+        # with no further traversal in the remainder. Every other '..' name is
+        # still refused exactly as before.
+        python3 - "$MAIN" <<'PYEOF'
+        import re, sys
+
+        HELPER = r'''
+        /*
+         * Some vendor drivers request their firmware through a relative path that
+         * walks out of the firmware base directory: the MTK tfa98xx speaker codec
+         * on mt6895 asks for '../../odm/firmware/tfa98xx.cnt'. Upstream treats any
+         * '..' as a traversal attempt and refuses the load with -EINVAL, which
+         * leaves the codec profile list empty, sends hw_params into XRUN and
+         * silences the speaker.
+         *
+         * Rather than dropping the guard, allow a name only when it is confined to
+         * a fixed set of vendor firmware roots and the remainder contains no
+         * further traversal. Every other '..' is still refused as before.
+         */
+        static bool name_is_confined_vendor_firmware(const char *name)
+        {
+        	static const char * const allowed_roots[] = {
+        		"../../odm/firmware/",
+        		"../odm/firmware/",
+        	};
+        	size_t i;
+
+        	for (i = 0; i < ARRAY_SIZE(allowed_roots); i++) {
+        		size_t len = strlen(allowed_roots[i]);
+
+        		if (strncmp(name, allowed_roots[i], len) != 0)
+        			continue;
+        		if (strstr(name + len, "..") != NULL)
+        			return false;
+        		return true;
+        	}
+
+        	return false;
+        }
+        '''
+
+        CALL_OLD = "\tif (name_contains_dotdot(name)) {"
+        CALL_NEW = ("\tif (name_contains_dotdot(name) &&\n"
+                    "\t    !name_is_confined_vendor_firmware(name)) {")
+
+        path = sys.argv[1]
+        src = open(path).read()
+        if 'name_is_confined_vendor_firmware' in src:
+            print("already patched; nothing to do")
+            sys.exit(0)
+        if CALL_OLD not in src:
+            print("::error::dotdot call site not found in " + path)
+            sys.exit(1)
+        m = re.search(r'static bool name_contains_dotdot\(const char \*name\)\n\{.*?\n\}\n',
+                      src, re.S)
+        if not m:
+            print("::error::name_contains_dotdot() definition not found")
+            sys.exit(1)
+        src = src[:m.end()] + HELPER + src[m.end():]
+        src = src.replace(CALL_OLD, CALL_NEW, 1)
+        open(path, 'w').write(src)
+        print("scoped vendor-firmware exception applied")
+        PYEOF
+        if [ $? -ne 0 ]; then
+          echo "::error::vendor firmware exception failed to apply"
+          exit 1
+        fi
+        grep -n -A2 'name_contains_dotdot(name) &&' "$MAIN" | head -4
+        echo "vendor firmware exception applied"
 
     - name: Revert MediaTek CMDQ jump to relative (RMX3561 firmware)
       shell: bash
