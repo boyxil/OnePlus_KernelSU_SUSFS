@@ -52,6 +52,10 @@ on:
         description: 'WildKernels/kernel_patches ref (default: main)'
         type: string
         default: ''
+      ksu_repo_owner:
+        description: 'GitHub owner of the KernelSU-Next fork to build from'
+        type: string
+        default: ''
       enable_ds:
         description: 'Enable Droidspaces (CONFIG_SYSVIPC=y)? OFF = no VINTF dialog (recommended for stock-like boots)'
         required: true
@@ -373,6 +377,7 @@ jobs:
           ksu_branch_or_hash: ${{ matrix.ksu_resolved_hash }}
           susfs_commit_hash_or_branch: ${{ github.event.inputs.susfs_branch || matrix.susfs_resolved_hash }}
           kernel_patches_ref: ${{ github.event.inputs.kernel_patches_ref }}
+          ksu_repo_owner: ${{ github.event.inputs.ksu_repo_owner }}
           optimize_level: O2
           build_timestamp: ''
           clean: true

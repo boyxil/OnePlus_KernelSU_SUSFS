@@ -17,6 +17,10 @@ inputs:
       - KSUN
       - KSU
   ksu_branch_or_hash:
+  ksu_repo_owner:
+    description: 'GitHub owner whose KernelSU-Next fork to use (default: KernelSU-Next)'
+    required: false
+    default: ''
     description: 'KSU branch or commit hash (empty = auto-detect by ksu_type)'
     required: false
     type: string
@@ -937,10 +941,15 @@ runs:
         cd "$KERNEL_PLATFORM_FOLDER"
         echo "Adding KernelSU Next..."
         KSU_INPUT="${{ inputs.ksu_branch_or_hash }}"
+        # setup.sh hardcodes OWNER="KernelSU-Next", so a ref that only exists in a
+        # fork is unresolvable. Point it at the fork we actually want.
+        KSU_REPO_OWNER="${{ inputs.ksu_repo_owner }}"
+        KSU_REPO_OWNER="${KSU_REPO_OWNER:-KernelSU-Next}"
+        KSU_SETUP_URL="https://raw.githubusercontent.com/${KSU_REPO_OWNER}/KernelSU-Next/fixed/kernel/setup.sh"
         if [ -z "$KSU_INPUT" ]; then
-          curl --fail --location --proto '=https' -LSs "https://raw.githubusercontent.com/boyxil/KernelSU-Next/fixed/kernel/setup.sh" | bash -
+          curl --fail --location --proto '=https' -LSs "$KSU_SETUP_URL" | sed "s|^OWNER=.*|OWNER=\"$KSU_REPO_OWNER\"|" | bash -
         else
-          curl --fail --location --proto '=https' -LSs "https://raw.githubusercontent.com/boyxil/KernelSU-Next/fixed/kernel/setup.sh" | bash -s "$KSU_INPUT"
+          curl --fail --location --proto '=https' -LSs "$KSU_SETUP_URL" | sed "s|^OWNER=.*|OWNER=\"$KSU_REPO_OWNER\"|" | bash -s "$KSU_INPUT"
         fi
         git submodule update --init --recursive
         cd KernelSU-Next/kernel
