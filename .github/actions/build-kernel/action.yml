@@ -1329,14 +1329,14 @@ runs:
         set -uo pipefail
         SRC=""
         for cand in \
-            "$KERNEL_PLATFORM_FOLDER/KernelSU-Next/kernel/feature/selinux_hide.c" \
-            "$KERNEL_PLATFORM_DIR/KernelSU-Next/kernel/feature/selinux_hide.c" \
-            "$GITHUB_WORKSPACE/KernelSU-Next/kernel/feature/selinux_hide.c" \
-            "$GITHUB_WORKSPACE/OP-ACE-RACE/kernel_platform/KernelSU-Next/kernel/feature/selinux_hide.c"; do
+            "${KERNEL_PLATFORM_FOLDER:-}/KernelSU-Next/kernel/feature/selinux_hide.c" \
+            "${KERNEL_PLATFORM_DIR:-}/KernelSU-Next/kernel/feature/selinux_hide.c" \
+            "${GITHUB_WORKSPACE:-}/KernelSU-Next/kernel/feature/selinux_hide.c" \
+            "${GITHUB_WORKSPACE:-}/OP-ACE-RACE/kernel_platform/KernelSU-Next/kernel/feature/selinux_hide.c"; do
           if [ -f "${cand:-}" ]; then SRC="$cand"; break; fi
         done
         if [ -z "$SRC" ]; then
-          SRC=$(find "$GITHUB_WORKSPACE" -name selinux_hide.c -path "*kernelsu*" 2>/dev/null | head -1 || true)
+          SRC=$(find "${GITHUB_WORKSPACE:-.}" -name selinux_hide.c -path "*kernelsu*" 2>/dev/null | head -1 || true)
         fi
         if [ -z "$SRC" ] || [ ! -f "$SRC" ]; then echo "::warning::selinux_hide.c not located; skipping avc sync"; exit 0; fi
         echo "avc sync target: $SRC"
