@@ -1180,6 +1180,20 @@ runs:
         echo "Applying SUSFS patches..."
         cp "$SUSFS_FOLDER/kernel_patches/fs/"* "$COMMON_KERNEL_FOLDER/fs/"
         cp "$SUSFS_FOLDER/kernel_patches/include/linux/"* "$COMMON_KERNEL_FOLDER/include/linux/"
+
+        # The copy above only drops susfs.c and the headers on disk. Without
+        # this patch they are never compiled: fs/Makefile has no susfs.o and the
+        # hide-mount / kstat / open hooks are not wired in, so the image builds
+        # fine and ships with CONFIG_KSU_SUSFS=y while containing no suSFS at
+        # all. Upstream WildKernels applies this patch unconditionally.
+        SUSFS_GKI_PATCH="$SUSFS_FOLDER/kernel_patches/50_add_susfs_in_gki-android12-5.10.patch"
+        if [ -f "$SUSFS_GKI_PATCH" ]; then
+          cd "$COMMON_KERNEL_FOLDER"
+          patch -p1 --forward < "$SUSFS_GKI_PATCH" && echo "✅ suSFS wired into the kernel build"
+          cd - >/dev/null
+        else
+          echo "::warning::50_add_susfs_in_gki-android12-5.10.patch not found; suSFS sources copied but not compiled"
+        fi
         
         susfs_version=$(grep '#define SUSFS_VERSION' "$COMMON_KERNEL_FOLDER/include/linux/susfs.h" | awk -F'"' '{print $2}')
         echo "SUSVER=$susfs_version" >> $GITHUB_ENV
