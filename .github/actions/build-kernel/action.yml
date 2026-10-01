@@ -1463,24 +1463,27 @@ runs:
         fi
 
         echo "Add SUSFS Configuration Settings"
+        # Match upstream WildKernels' suSFS option set exactly (their
+        # susfs-config action enables ten options). Ours used to add
+        # TRY_UMOUNT / AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT / HAS_MAGIC_MOUNT /
+        # AUTO_ADD_SUS_KSU_DEFAULT_MOUNT / AUTO_ADD_SUS_BIND_MOUNT on top, and
+        # with those enabled ReZygisk stopped injecting into app processes:
+        # the injector mounts its .so into the freshly spawned process, and the
+        # auto-umount machinery tears the bind mount back down, so nothing
+        # survives to be seen in /proc/<pid>/maps. SUS_MAP=y stays because it
+        # only hides a path when ksu_susfs add_sus_map is called for it, which
+        # nothing in our tree does -- it is inert here.
         cat >> "$COMMON_KERNEL_FOLDER/arch/arm64/configs/gki_defconfig" <<EOF
         CONFIG_KSU_SUSFS=y
-        CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y
         CONFIG_KSU_SUSFS_SUS_PATH=y
         CONFIG_KSU_SUSFS_SUS_MOUNT=y
-        CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y
-        CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y
         CONFIG_KSU_SUSFS_SUS_KSTAT=y
-        CONFIG_KSU_SUSFS_SUS_OVERLAYFS=n
-        CONFIG_KSU_SUSFS_TRY_UMOUNT=y
-        CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y
         CONFIG_KSU_SUSFS_SPOOF_UNAME=y
         CONFIG_KSU_SUSFS_ENABLE_LOG=y
         CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y
         CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y
         CONFIG_KSU_SUSFS_OPEN_REDIRECT=y
         CONFIG_KSU_SUSFS_SUS_MAP=y
-        CONFIG_KSU_SUSFS_SUS_SU=n
         EOF
         
         echo "::endgroup::"
