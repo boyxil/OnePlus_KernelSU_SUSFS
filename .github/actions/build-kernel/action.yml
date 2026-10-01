@@ -1421,6 +1421,41 @@ runs:
         fi
         echo "✅ SUSFS patches applied"
         
+        # The enable patch 10_enable_susfs_for_ksu.patch also carries the only
+        # declaration of the Kconfig symbols: 'config KSU_SUSFS' and its
+        # sub-options live in kernel/Kconfig of the KSU checkout. We skip that
+        # patch for KSUN (upstream ships SUSFS in-tree and gates the patch on
+        # tiann), but this fork's kernel/Kconfig has no such block, so nothing
+        # declares the symbol. olddefconfig then silently drops CONFIG_KSU_SUSFS=y
+        # with no warning, obj-$(CONFIG_KSU_SUSFS) never expands, susfs.o is not
+        # built, and the image ships without any suSFS code.
+        # Inject just the Kconfig menu -- no C changes, so none of the rejected
+        # hunks come back.
+        KSUN_KCONFIG="$KSUN_FOLDER/kernel/Kconfig"
+        if [ -f "$KSUN_KCONFIG" ] && ! grep -q '^config KSU_SUSFS$' "$KSUN_KCONFIG"; then
+          {
+            echo ""
+            echo 'menu "KernelSU - SUSFS"'
+            echo "config KSU_SUSFS"
+            echo -e '\tbool \"KernelSU addon - SUSFS\"'
+            echo -e '\tdepends on KSU'
+            echo -e '\tdefault y'
+            echo -e '\tdepends on THREAD_INFO_IN_TASK'
+            echo -e '\thelp'
+            echo -e '\t  Patch and Enable SUSFS to kernel with KernelSU.'
+            for opt in SUS_PATH SUS_MOUNT SUS_KSTAT SPOOF_UNAME ENABLE_LOG \
+                       HIDE_KSU_SUSFS_SYMBOLS SPOOF_CMDLINE_OR_BOOTCONFIG \
+                       OPEN_REDIRECT SUS_MAP; do
+              echo "config KSU_SUSFS_$opt"
+              echo -e '\tbool \"SUSFS feature: '"$opt"'\"'
+              echo -e '\tdepends on KSU_SUSFS'
+              echo -e '\tdefault y'
+            done
+            echo "endmenu"
+          } >> "$KSUN_KCONFIG"
+          echo "✅ injected config KSU_SUSFS menu into kernel/Kconfig"
+        fi
+
         echo "Add SUSFS Configuration Settings"
         cat >> "$COMMON_KERNEL_FOLDER/arch/arm64/configs/gki_defconfig" <<EOF
         CONFIG_KSU_SUSFS=y
