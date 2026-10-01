@@ -1181,20 +1181,17 @@ runs:
         cp "$SUSFS_FOLDER/kernel_patches/fs/"* "$COMMON_KERNEL_FOLDER/fs/"
         cp "$SUSFS_FOLDER/kernel_patches/include/linux/"* "$COMMON_KERNEL_FOLDER/include/linux/"
 
-        # The copy above only drops susfs.c and the headers on disk. Without
-        # this patch they are never compiled: fs/Makefile has no susfs.o and the
-        # hide-mount / kstat / open hooks are not wired in, so the image builds
-        # fine and ships with CONFIG_KSU_SUSFS=y while containing no suSFS at
-        # all. Upstream WildKernels applies this patch unconditionally.
-        SUSFS_GKI_PATCH="$SUSFS_FOLDER/kernel_patches/50_add_susfs_in_gki-android12-5.10.patch"
-        if [ -f "$SUSFS_GKI_PATCH" ]; then
-          cd "$COMMON_KERNEL_FOLDER"
-          patch -p1 --forward < "$SUSFS_GKI_PATCH" && echo "✅ suSFS wired into the kernel build"
-          cd - >/dev/null
-        else
-          echo "::warning::50_add_susfs_in_gki-android12-5.10.patch not found; suSFS sources copied but not compiled"
-        fi
-        
+        # "Add KernelSU Next" already ran 50_add_susfs_in_gki-*.patch, but that
+        # step runs BEFORE this one copies susfs.c into the tree, so it patches a
+        # tree that does not have susfs.c yet. The result: the patch is reported
+        # as applied, fs/Makefile gets no susfs.o, and the image builds clean with
+        # CONFIG_KSU_SUSFS=y while 'strings Image | grep -c susfs' is 0.
+        # Re-apply it here, after the sources are in place.
+        cd "$COMMON_KERNEL_FOLDER"
+        patch -p1 --forward < "$SUSFS_FOLDER/kernel_patches/50_add_susfs_in_gki-android12-5.10.patch" \
+          && echo "✅ suSFS wired into fs/Makefile and the kernel hooks"
+        cd - >/dev/null
+
         susfs_version=$(grep '#define SUSFS_VERSION' "$COMMON_KERNEL_FOLDER/include/linux/susfs.h" | awk -F'"' '{print $2}')
         echo "SUSVER=$susfs_version" >> $GITHUB_ENV
         echo "$susfs_version" >> "${ARTIFACTS_FOLDER}/${OP_MODEL}_${OP_OS_VERSION}.txt"
