@@ -2321,7 +2321,10 @@ runs:
         mv "${ARTIFACTS_FOLDER}/${OP_MODEL}_${OP_OS_VERSION}.txt" "$AK3_FOLDER/"
         cd "$AK3_FOLDER"
         
-        sed -i 's/do.check_boot_version=.*/do.check_boot_version=1/' anykernel.sh
+        # ak3-core.sh honours do.check_boot_version=0 as an explicit bypass
+        # ("[BYPASS] version check SKIPPED"). Leaving it at 1 makes AnyKernel
+        # refuse the flash when the zip's build does not match the phone's.
+        sed -i 's/do.check_boot_version=.*/do.check_boot_version=0/' anykernel.sh
         
         case "$OP_BRANCH" in
           wild/sm8850|wild/sm8845)
