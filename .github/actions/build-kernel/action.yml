@@ -1286,21 +1286,15 @@ runs:
             ;;
           "v2.2.0")
             if [ "${{ inputs.ksu_type }}" = "KSUN" ]; then
-              cd "$KSUN_FOLDER"
-              patch -p1 --forward < "$SUSFS_FOLDER/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" || true
-              for file in $(find ./kernel -maxdepth 2 -name "*.rej" -exec basename {} .rej \;); do
-                fix_patch="$KERNEL_PATCHES_FOLDER/next/susfs_fix_patches/$susfs_version/fix_$file.patch"
-                if [ -f "$fix_patch" ]; then
-                  echo "Patching file: $file with fix_$file.patch"
-                  patch -p1 --forward < "$fix_patch" || echo "::warning::fix_$file.patch did not apply cleanly; continuing (reject left in place)"
-                else
-                  echo "::warning::No fix patch for $file (fix_$file.patch not in kernel_patches); leaving reject in place"
-                fi
-              done
-              echo "Patching Hook Mode!"
-              patch -p1 --forward < "$KERNEL_PATCHES_FOLDER/next/susfs_fix_patches/$susfs_version/overwrite_hook_mode.patch" || echo "::warning::overwrite_hook_mode.patch did not apply; continuing"
-              echo "Patching KSU_TOOLKIT Support for SusFS kernel!"
-              patch -p1 --forward < "$KERNEL_PATCHES_FOLDER/next/susfs_fix_patches/$susfs_version/ksu_toolkit.patch" || echo "::warning::ksu_toolkit.patch did not apply; continuing"
+              # Leave KernelSU-Next alone. Upstream Next already ships SUSFS
+              # (userspace/ksud/susfsd.rs plus the kernel-side config), and
+              # upstream's own CI gates 10_enable_susfs_for_ksu.patch on
+              # root_flavor == 'kernelsu' (tiann) only. Applying it to Next is
+              # what left 6/8 rejected hunks in kernel/core/init.c and pulled in
+              # is_first_zygote, a symbol that exists only in 6.x kernels.
+              # The kernel-side patches (fs/, include/linux/) were already
+              # applied above and are what provide SUSFS here.
+              echo "KernelSU-Next ships SUSFS in-tree; skipping 10_enable_susfs_for_ksu.patch"
             else
               cd "$KSU_FOLDER"
               patch -p1 --forward < "$SUSFS_FOLDER/kernel_patches/KernelSU/10_enable_susfs_for_ksu.patch" || true
