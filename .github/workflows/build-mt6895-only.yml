@@ -45,9 +45,9 @@ on:
         type: string
         default: '234f6e040fcbca18b16d2398e1aa225712ec99ad'
       susfs_branch:
-        description: 'SUSFS branch or commit hash. Pinned to the last commit carrying v2.2.0, which is the newest version build-kernel has fix-patches for; the branch head is v2.3.0 and CI rejects it.'
+        description: 'SUSFS branch or commit hash. Same commit upstream WildKernels builds with (run 31582235180). Still v2.2.0, but d4c3914bc2e4's fix_sucompat.c.patch references is_first_zygote, a symbol that only exists in 6.x kernels, which breaks the 5.10 link.'
         type: string
-        default: 'd4c3914bc2e4'
+        default: '3c14ad549f826b1f53878ec8c12253efebeed75a'
       kernel_patches_ref:
         description: 'WildKernels/kernel_patches ref (default: main)'
         type: string
