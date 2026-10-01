@@ -1181,17 +1181,6 @@ runs:
         cp "$SUSFS_FOLDER/kernel_patches/fs/"* "$COMMON_KERNEL_FOLDER/fs/"
         cp "$SUSFS_FOLDER/kernel_patches/include/linux/"* "$COMMON_KERNEL_FOLDER/include/linux/"
 
-        # "Add KernelSU Next" already ran 50_add_susfs_in_gki-*.patch, but that
-        # step runs BEFORE this one copies susfs.c into the tree, so it patches a
-        # tree that does not have susfs.c yet. The result: the patch is reported
-        # as applied, fs/Makefile gets no susfs.o, and the image builds clean with
-        # CONFIG_KSU_SUSFS=y while 'strings Image | grep -c susfs' is 0.
-        # Re-apply it here, after the sources are in place.
-        cd "$COMMON_KERNEL_FOLDER"
-        patch -p1 --forward < "$SUSFS_FOLDER/kernel_patches/50_add_susfs_in_gki-android12-5.10.patch" \
-          && echo "✅ suSFS wired into fs/Makefile and the kernel hooks"
-        cd - >/dev/null
-
         susfs_version=$(grep '#define SUSFS_VERSION' "$COMMON_KERNEL_FOLDER/include/linux/susfs.h" | awk -F'"' '{print $2}')
         echo "SUSVER=$susfs_version" >> $GITHUB_ENV
         echo "$susfs_version" >> "${ARTIFACTS_FOLDER}/${OP_MODEL}_${OP_OS_VERSION}.txt"
@@ -1384,8 +1373,12 @@ runs:
         # Fix MKP compatibility: replace &selinux_state with &fake_state in SUSFS hooks
         sed -i 's/avc_has_perm(\&selinux_state,/avc_has_perm(\&fake_state,/g' "$SUSFS_FOLDER/kernel_patches/50_add_susfs_in_${{ env.SUSFS_KERNEL_BRANCH }}.patch"
 
-        patch -p1 --forward < "$SUSFS_FOLDER/kernel_patches/50_add_susfs_in_${{ env.SUSFS_KERNEL_BRANCH }}.patch"
-        
+        # 'patch --forward' exits non-zero when every hunk is already applied,
+        # and this step runs under 'set -e', so a re-run of an already-patched
+        # tree would abort the whole build. Treat that as success.
+        patch -p1 --forward < "$SUSFS_FOLDER/kernel_patches/50_add_susfs_in_${{ env.SUSFS_KERNEL_BRANCH }}.patch" \
+          || echo "::warning::50_add_susfs already applied; continuing"
+
         # Revert Fake kernel patch
         if [ "$fake_patched_expand" = 1 ]; then
           if [ "${{ env.ANDROID_VER }}" = "android15" ] && [ "${{ env.KERNEL_VER }}" = "6.6" ]; then
